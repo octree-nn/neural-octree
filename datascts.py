@@ -80,7 +80,7 @@ class ReadNpz:
     self.has_normal = has_normal
     self.has_label = has_label
 
-  def __call__(self, filename: str, depth=5):
+  def __call__(self, filename: str, q_depth=6):
     #TODO: read point cloud and normal/rgb/pos from .png file
     # raw = np.load(filename)
     # 把filename的文件名替换为pcd.pth, 保留前面的路径不变，然后用torch.load读取
@@ -133,13 +133,13 @@ class ReadNpz:
     valid = (depth_image != 65535).reshape(-1)
     depth_image = depth_image.float() * (depth_max - depth_min) / 65535.0 + depth_min
     origins, dirs, points, normals, albedo = create_point_cloud_color(depth_image, normal_image, albedo_image, camera_matrix, transform_matrix)
-    scale = 1 << 5
+    scale = 1 << q_depth
     half_scale = scale >> 1
     points = points * scale + half_scale
     origins = origins * scale + half_scale
     hits = valid.float()
     intersections = torch.cat([hits.unsqueeze(-1), points, normals, albedo], dim=-1)
-    pins, pouts, indices, hits, positions, normals, colors, labels = query_valid_ray_voxel_pair(origins, dirs, octree, intersections, scale, 5)
+    pins, pouts, indices, hits, positions, normals, colors, labels = query_valid_ray_voxel_pair(origins, dirs, octree, intersections, scale, q_depth)
     octree.construct_all_neigh()
     output = dict()
     output['points'] = points
@@ -152,7 +152,7 @@ class ReadNpz:
     output['colors'] = colors   
     output['labels'] = labels
     output['octree'] = octree
-
+    
     # output['points'] = torch.from_numpy(raw['vertices']).float().view(-1, 3)
     # output["vp"] = torch.from_numpy(raw['viewpoints'][:16, :]).float().view(-1,3)
 

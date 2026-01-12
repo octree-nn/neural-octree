@@ -342,23 +342,25 @@ class UNet(torch.nn.Module):
             for i in range(self.encoder_stages)])
 
     # # decoder
-    #     channel = [self.decoder_channel[i+1] + self.encoder_channel[-i-2]
-    #             for i in range(self.decoder_stages)]
-    #     self.upsample = torch.nn.ModuleList([OctreeDeconvBnRelu(
-    #         self.decoder_channel[i], self.decoder_channel[i+1], kernel_size=[2],
-    #         stride=2, nempty=nempty) for i in range(self.decoder_stages)])
-    #     self.decoder = torch.nn.ModuleList([ocnn.modules.OctreeResBlocks(
-    #         channel[i], self.decoder_channel[i+1],
-    #         self.decoder_blocks[i], self.bottleneck, nempty, self.resblk)
-    #         for i in range(self.decoder_stages)])
+        channel = [self.decoder_channel[i+1] + self.encoder_channel[-i-2]
+                for i in range(self.decoder_stages)]
+        self.upsample = torch.nn.ModuleList([OctreeDeconvBnRelu(
+            self.decoder_channel[i], self.decoder_channel[i+1], kernel_size=[2],
+            stride=2, nempty=nempty) for i in range(self.decoder_stages)])
+        self.decoder = torch.nn.ModuleList([ocnn.modules.OctreeResBlocks(
+            channel[i], self.decoder_channel[i+1],
+            self.decoder_blocks[i], self.bottleneck, nempty, self.resblk)
+            for i in range(self.decoder_stages)])
     #     self.header = ocnn.modules.Conv1x1(self.decoder_channel[-1], 63, use_bias=True)
     #     self.octree_interp = ocnn.nn.OctreeInterp(interp, nempty)
 
     def config_network(self):
         self.encoder_channel = [32, 32, 64, 128, 256]
-        self.decoder_channel = [256, 256, 128, 96, 96]
+        # self.decoder_channel = [256, 256, 128, 96, 96]
+        # single decoder
+        self.decoder_channel = [256, 256]
         self.encoder_blocks = [2, 3, 4, 6]
-        self.decoder_blocks = [2, 2, 2, 2]
+        self.decoder_blocks = [2]
         self.bottleneck = 1
         self.resblk = OctreeBnResBlock2
 
@@ -373,22 +375,23 @@ class UNet(torch.nn.Module):
             convd[d-1] = self.encoder[i](conv, octree, d-1)
         return convd
 
-    # def unet_decoder(self, convd: Dict[int, torch.Tensor], octree: Octree, depth: int):
-    #     deconv = convd[depth]
-    #     for i in range(self.decoder_stages):
-    #         d = depth + i
-    #         deconv = self.upsample[i](deconv, octree, d)
-    #         deconv = torch.cat([convd[d+1], deconv], dim=1)  # skip connections
-    #         deconv = self.decoder[i](deconv, octree, d+1)
-    #     return deconv
+    def unet_decoder(self, convd: Dict[int, torch.Tensor], octree: Octree, depth: int):
+        deconv = convd[depth]
+        for i in range(self.decoder_stages):
+            d = depth + i
+            deconv = self.upsample[i](deconv, octree, d)
+            deconv = torch.cat([convd[d+1], deconv], dim=1)  # skip connections
+            deconv = self.decoder[i](deconv, octree, d+1)
+        return deconv
 
     def forward(self, data: torch.Tensor, octree: Octree, depth: int):
         convd = self.unet_encoder(data, octree, depth)
-        # deconv = self.unet_decoder(convd, octree, depth - self.encoder_stages)
+        deconv = self.unet_decoder(convd, octree, depth - self.encoder_stages)
         # deconv = self.header(deconv) # if mul instead of cat
         # interp_depth = depth - self.encoder_stages + self.decoder_stages
         # feature = self.octree_interp(deconv, octree, interp_depth, query_pts)
-        return convd[depth - self.encoder_stages]
+        # return convd[depth - self.encoder_stages]
+        return deconv
 
 
 class VisNet(nn.Module):
@@ -482,7 +485,8 @@ class NeuralIntersectionModel(nn.Module):
 
     def forward(self, data: torch.Tensor, octree: Octree, depth: int, pin: torch.Tensor, direction: torch.Tensor, voxel_indices: torch.Tensor) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] | Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         vert_feat = self.feature_model(data, octree, depth)
-        n_vertices, vert_indexes = octree.compute_vertices(5)
+        query_d = 6
+        n_vertices, vert_indexes = octree.compute_vertices(query_d)
         assert vert_feat.shape[0] == vert_indexes.shape[0]
         all_vertieces = torch.zeros((n_vertices * 8, vert_feat.shape[1] // 8 + 1), dtype=vert_feat.dtype, device=vert_feat.device)
         vert_indexes_expanded = vert_indexes * 8 + torch.arange(8, device=vert_indexes.device).unsqueeze(0)

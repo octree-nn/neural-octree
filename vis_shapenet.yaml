@@ -2,17 +2,17 @@ SOLVER:
   # gpu: 1, 2, 7
   # gpu: 0, 3, 4, 5
   # gpu: 3, 
-  gpu: 1, 
-  # gpu: 4, 5, 6, 7
+  # gpu: 1, 
+  gpu: 4, 5, 6, 7
   # gpu: 5,
   # run: best_view
-  # run: train
+  run: train
   # run: test
-  run: render
+  # run: render
   type: adamw
   # empty_cache: false
 
-  logdir: logs/train_online
+  logdir: logs/depth6
   max_epoch: 80
   test_every_epoch: 5
   clip_grad: 1.0
