@@ -13,17 +13,17 @@ SOLVER:
   type: adamw
   # empty_cache: false
 
-  logdir: logs/depth6_0113
+  logdir: logs/d6_lr001
   max_epoch: 80
   test_every_epoch: 5
   clip_grad: 1.0
   lr_type: cos_warmup
   warmup_epochs: 5
-  warmup_init: 0.0001
+  warmup_init: 0.001
   # milestones: (30,60)
   ckpt_num: 20
   port: 12355
-  lr: 0.005
+  lr: 0.01
   weight_decay: 0.00001
   save_pred: False
   pin_memory: false
@@ -52,7 +52,8 @@ DATA:
     # location: /home/wangjh/render_16views
     # location: /home/wangjh/02958343/render_16views
     # location: /data/wangjh/render_shapenet_results/02958343/render_16views
-    location: /home/wangjh/render_shapenet_results/02958343/render_16views
+    # location: /home/wangjh/render_shapenet_results/02958343/render_16views
+    location: /mnt/sdc/wangjh/pytorch3d_render_colmap/render_shapenet_results/02958343/render_16views
     # filelist: /data/wangjh/NeuOctree_1208/cache/depth5/02958343_car/filelist/train.txt
     filelist: train.txt
     batch_size: 1
@@ -86,11 +87,12 @@ DATA:
     # location: data/ShapeNet/ShapeNet_NV_simplified_with_normal
     # location: cache/depth5/02958343_car
     # location: /home/wangjh/02958343/render_16views
-    location: /home/wangjh/render_shapenet_results/02958343/render_16views
+    # location: /home/wangjh/render_shapenet_results/02958343/render_16views
+    location: /mnt/sdc/wangjh/pytorch3d_render_colmap/render_shapenet_results/02958343/render_16views
     # location: /data/wangjh/render_shapenet_results/02958343/render_16views
     # location: /home/wangjh/render_16views
     # filelist: /data/wangjh/NeuOctree_1208/cache/depth5/02958343_car/filelist/train.txt
-    filelist: train1.txt
+    filelist: test.txt
     # filelist: data/ShapeNet/ShapeNet_NV_simplified_with_normal/filelist/best_view.txt
     batch_size: 1
     shuffle: False

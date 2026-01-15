@@ -105,7 +105,7 @@ class ReadNpz:
     data_path = filename.rsplit('/', 1)[0]
     i = filename.rsplit('/', 1)[1].split('.')[0]
     sub_data_path = data_path.rsplit('/', 1)[1]
-    pcd_path = "/data/wangjh/render_shapenet_results/02958343/render_16views/" + sub_data_path + '/pcd.pth'
+    pcd_path = "/mnt/sdc/wangjh/pytorch3d_render_colmap/render_shapenet_results_pcd2pth/02958343/pcd/" + sub_data_path + '/pcd.pth'
     # pcd_path = os.path.join(data_path, 'pcd.pth')
     points, colors = torch.load(pcd_path, weights_only=True)
     points_torch = points.cuda()
