@@ -3,8 +3,9 @@ SOLVER:
   # gpu: 0, 3, 4, 5
   # gpu: 3, 
   # gpu: 1, 
-  gpu: 4, 5, 6, 7
-  # gpu: 5,
+  # gpu: 4, 5, 6, 7
+  gpu: 0, 1, 2, 3
+  # gpu: 0,
   # run: best_view
   run: train
   # run: test
@@ -12,7 +13,7 @@ SOLVER:
   type: adamw
   # empty_cache: false
 
-  logdir: logs/depth6
+  logdir: logs/depth6_0113
   max_epoch: 80
   test_every_epoch: 5
   clip_grad: 1.0
@@ -21,8 +22,8 @@ SOLVER:
   warmup_init: 0.0001
   # milestones: (30,60)
   ckpt_num: 20
-  port: 12356
-  lr: 0.001
+  port: 12355
+  lr: 0.005
   weight_decay: 0.00001
   save_pred: False
   pin_memory: false
@@ -48,7 +49,11 @@ DATA:
 
     # data loading
     # location: data/ShapeNet/ShapeNet_NV_simplified_with_normal
-    location: /home/wangjh/render_16views
+    # location: /home/wangjh/render_16views
+    # location: /home/wangjh/02958343/render_16views
+    # location: /data/wangjh/render_shapenet_results/02958343/render_16views
+    location: /home/wangjh/render_shapenet_results/02958343/render_16views
+    # filelist: /data/wangjh/NeuOctree_1208/cache/depth5/02958343_car/filelist/train.txt
     filelist: train.txt
     batch_size: 1
     shuffle: True
@@ -80,9 +85,12 @@ DATA:
     # data loading
     # location: data/ShapeNet/ShapeNet_NV_simplified_with_normal
     # location: cache/depth5/02958343_car
-    location: /home/wangjh/render_16views
-    # filelist: cache/depth5/02958343_car/filelist/train.txt
-    filelist: train.txt
+    # location: /home/wangjh/02958343/render_16views
+    location: /home/wangjh/render_shapenet_results/02958343/render_16views
+    # location: /data/wangjh/render_shapenet_results/02958343/render_16views
+    # location: /home/wangjh/render_16views
+    # filelist: /data/wangjh/NeuOctree_1208/cache/depth5/02958343_car/filelist/train.txt
+    filelist: train1.txt
     # filelist: data/ShapeNet/ShapeNet_NV_simplified_with_normal/filelist/best_view.txt
     batch_size: 1
     shuffle: False

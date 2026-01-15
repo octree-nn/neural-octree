@@ -420,9 +420,9 @@ class VisSolver(Solver):
             octree, points, pins, pouts, indices, hits, positions, normals, colors, labels = \
                 batch['octree'], batch['points'], batch['pins'], batch['pouts'], batch['indices'], \
                 batch['hits'], batch['positions'], batch['normals'], batch['colors'], batch['labels']
-            hit_mask = hits > 0.5
+            hit_mask = hits > 0.1
             rays = labels[hit_mask]
-            pos = (positions[hit_mask] * (255 / 32)).byte()
+            pos = (positions[hit_mask] * (255 / 64)).byte()
             norms = ((normals[hit_mask] + 1.0) / 2.0 * 255).byte()
             # cols = (colors[hit_mask] * 255).byte()
             H = W = 512
@@ -439,7 +439,7 @@ class VisSolver(Solver):
             # gt_img = torch.cat([gt_position_map.view(H, W, 3), gt_normal_map.view(H, W, 3), gt_col_map.view(H, W, 3), gt_hit_map.view(H, W, 3)], dim=1)
             gt_img = torch.cat([gt_position_map.view(H, W, 3), gt_normal_map.view(H, W, 3), gt_hit_map.view(H, W, 3)], dim=1)
             input_feature = self.get_input_feature(batch['octree'], self.FLAGS.MODEL)
-            print(input_feature.shape)
+            # print(input_feature.shape)
             # query_pts = torch.cat([points.points, points.batch_id], dim=1)
             # viewdirs = self.embedder(viewdirs.view(-1, 3))
             tgt_normal_map = self.remapping_image(labels, normals, fill=0)
@@ -448,7 +448,7 @@ class VisSolver(Solver):
             directions = F.normalize(pouts - pins, dim=-1)
             vert_feat = self.model.feature_model(input_feature, octree, octree.depth)
             # print(vert_feat.shape)
-            n_vertices, vert_indexes = octree.compute_vertices(5)
+            n_vertices, vert_indexes = octree.compute_vertices(6)
             assert vert_feat.shape[0] == vert_indexes.shape[0]
             all_vertieces = torch.zeros((n_vertices * 8, vert_feat.shape[1] // 8 + 1), dtype=vert_feat.dtype, device=vert_feat.device)
             vert_indexes_expanded = vert_indexes * 8 + torch.arange(8, device=vert_indexes.device).unsqueeze(0)

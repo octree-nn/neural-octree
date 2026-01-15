@@ -105,7 +105,8 @@ class ReadNpz:
     data_path = filename.rsplit('/', 1)[0]
     i = filename.rsplit('/', 1)[1].split('.')[0]
     sub_data_path = data_path.rsplit('/', 1)[1]
-    pcd_path = "/data/wangjh/NeuOctree_1208/cache/depth5/02958343_car/" + sub_data_path + '/pcd.pth'
+    pcd_path = "/data/wangjh/render_shapenet_results/02958343/render_16views/" + sub_data_path + '/pcd.pth'
+    # pcd_path = os.path.join(data_path, 'pcd.pth')
     points, colors = torch.load(pcd_path, weights_only=True)
     points_torch = points.cuda()
     colors_torch = colors.cuda()
@@ -128,9 +129,12 @@ class ReadNpz:
     depth_min, depth_max = frame['depth']['min'], frame['depth']['max']
     transform_matrix = torch.tensor(frame['transform_matrix'], dtype=torch.float, device='cuda')
     normal_image = read_image(os.path.join(data_path, f'{file_path}_normal.png'))[:,:,:3].cuda()
+    # depth_image = read_image(os.path.join(data_path, f'{file_path}_depth.jpg')).cuda()
     depth_image = read_image(os.path.join(data_path, f'{file_path}_depth.png')).cuda()
     albedo_image = read_image(os.path.join(data_path, f'{file_path}_albedo.png'))[:,:,:3].cuda()
+    # valid = (depth_image < 255.0).reshape(-1)
     valid = (depth_image != 65535).reshape(-1)
+    # depth_image = depth_image.float() * (depth_max - depth_min) / 255.0 + depth_min
     depth_image = depth_image.float() * (depth_max - depth_min) / 65535.0 + depth_min
     origins, dirs, points, normals, albedo = create_point_cloud_color(depth_image, normal_image, albedo_image, camera_matrix, transform_matrix)
     scale = 1 << q_depth

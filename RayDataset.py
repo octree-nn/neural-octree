@@ -160,7 +160,7 @@ class TrainingRayDataset(Dataset):
 
 
 class Renderer:
-    def __init__(self, model: NeuralRendererModel, vfeats: torch.Tensor, vidxs: torch.Tensor, sparse_voxels: Octree, transform_matrices: list[torch.Tensor], camera_angle_x = 0.6981317007977318, W = 512, H = 512, depth = 5, max_batch_size = 262144, device = 'cuda'):
+    def __init__(self, model: NeuralRendererModel, vfeats: torch.Tensor, vidxs: torch.Tensor, sparse_voxels: Octree, transform_matrices: list[torch.Tensor], camera_angle_x = 0.6981317007977318, W = 512, H = 512, depth = 6, max_batch_size = 262144, device = 'cuda'):
         focal_length = 0.5 / np.tan(camera_angle_x / 2) * W
 
         self.depth = depth
@@ -247,7 +247,7 @@ class Renderer:
         p_query = ((pin + pout) / 2).long()
         # torch.cat([p_query, torch.zeros((p_query.shape[0], 1), dtype=torch.long, device=device)], dim=-1)
         p_query_b = torch.cat([p_query, torch.zeros((p_query.shape[0], 1), dtype=torch.long, device=device)], dim=-1)
-        all_index = sparse_voxels.search_xyzb(p_query_b, depth=5, nempty=True)
+        all_index = sparse_voxels.search_xyzb(p_query_b, depth=6, nempty=True)
         valid_mask = torch.nonzero(all_index != -1, as_tuple=False).squeeze(-1)
         
         indices = all_index[valid_mask]

@@ -78,6 +78,10 @@ def create_point_cloud_color(depth_image: torch.Tensor, normal_image: torch.Tens
     points_transformed = points_transformed.reshape(-1, 3)
 
     normals = normal_image.reshape(-1, 3).float() / 255.0 * 2.0 - 1.0
+    #normals to BRG
+    normals = normals[:, [2, 0, 1]]
+    normals = normals * torch.tensor([1, -1, 1], device=device)
+
     colors = color_image.reshape(-1, 3).float() / 255.0
     return origins, dirs, points_transformed, normals, colors
 
@@ -189,10 +193,10 @@ def query_valid_ray_voxel_pair(origins: torch.Tensor, dirs: torch.Tensor, octree
     # positions = positions - torch.floor(positions)
     normals = intersections[tags, 4:7]
     #如果方向点乘法线小于0，说明法线方向错误，取反。方向根据pout - pin
-    # view_dirs = (pout - pin) / torch.norm(pout - pin, dim=-1, keepdim=True)
-    # normal_dot_view = (normals * view_dirs).sum(dim=-1)
-    # wrong_normal_mask = (normal_dot_view > 0)
-    # normals[wrong_normal_mask] = -normals[wrong_normal_mask]
+    view_dirs = (pout - pin) / torch.norm(pout - pin, dim=-1, keepdim=True)
+    normal_dot_view = (normals * view_dirs).sum(dim=-1)
+    wrong_normal_mask = (normal_dot_view > 0)
+    normals[wrong_normal_mask] = -normals[wrong_normal_mask]
     
     colors = intersections[tags, 7:10]
     # normals[hits < 0.5] = 0
