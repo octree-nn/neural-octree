@@ -401,7 +401,8 @@ class VisSolver(Solver):
             # print(filename)
             object_name, frame_name = filename.split('/')
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            data_path = os.path.join("/data/wangjh/transforms_extracted", object_name)
+            # data_path = os.path.join("/data/wangjh/transforms_extracted", object_name)
+            data_path = os.path.join("/mnt/sdc/wangjh/pytorch3d_render_colmap/render_shapenet_results/02958343/render_16views", object_name)
             # print(object_name)
             # exit(0)
             frames, camera_matrix = read_transforms(os.path.join(data_path, 'transforms.json'), device)
@@ -458,7 +459,7 @@ class VisSolver(Solver):
             renderer = Renderer(self.model.renderer_model, average_feat, vert_indexes, octree, transform_matrices)
             output_dir = os.path.join(self.FLAGS.SOLVER.logdir, 'rendering_views')
             os.makedirs(output_dir, exist_ok=True)
-            renderer.render(save_images=True, save_video=False, output_dir=output_dir, object_name=object_name, gt_img=[gt_img])
+            renderer.render(save_images=True, save_video=False, output_dir=output_dir, object_name=object_name, gt_img=[gt_img], frame_ids=[frame_id])
             # batch['iter_num'] = it
             # batch['epoch'] = epoch
             # with torch.no_grad():

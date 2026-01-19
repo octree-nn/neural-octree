@@ -185,7 +185,7 @@ class Renderer:
     def render_new_frame(self, transform_matrix: torch.Tensor):
         return Renderer.render_frame(transform_matrix, self.camera_matrix, self.sparse_voxels, self.model, self.v_feats, self.v_idxs, self.depth, self.scale, self.W, self.H, self.max_batch_size, self.device)
 
-    def render(self, save_images = True, save_video = False, output_dir = f'./rendered_views/{config_name}', object_name=f'{object_name}', gt_img=None, fps=60):
+    def render(self, save_images = True, save_video = False, output_dir = f'./rendered_views/{config_name}', object_name=f'{object_name}', gt_img=None, fps=60, frame_ids=None):
         if save_images:
             object_dir = os.path.join(output_dir, object_name)
             os.makedirs(object_dir, exist_ok=True)
@@ -208,7 +208,10 @@ class Renderer:
                 image = torch.cat([image, gt_img[i]], dim=0)
             image = image.cpu().numpy()
             if save_images:
-                Image.fromarray(image).save(os.path.join(object_dir, f'{i}.png'))
+                if frame_ids is not None:
+                    Image.fromarray(image).save(os.path.join(object_dir, f'{frame_ids[i]:03d}.png'))
+                else:
+                    Image.fromarray(image).save(os.path.join(object_dir, f'{i}.png'))
             if save_video:
                 writer.write(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
 

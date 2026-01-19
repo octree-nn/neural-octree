@@ -120,8 +120,11 @@ class ReadNpz:
     # points_torch = torch.from_numpy(points_np).cuda()
     # colors_torch = torch.from_numpy(colors_np).cuda()
     points = Points(points_torch, features=colors_torch)
-    bbmin, bbmax = points.bbox()
-    points.normalize(bbmin, bbmax, scale=1)
+    # bbmin, bbmax = points.bbox()
+    # points.normalize(bbmin, bbmax, scale=1)
+    points.points = points.points * 1.98
+    # print(bbmin, bbmax)
+    # exit(0)
     octree = Octree(depth=9, device='cuda')
     octree.build_octree(points)
 
@@ -137,6 +140,8 @@ class ReadNpz:
     # depth_image = depth_image.float() * (depth_max - depth_min) / 255.0 + depth_min
     depth_image = depth_image.float() * (depth_max - depth_min) / 65535.0 + depth_min
     origins, dirs, points, normals, albedo = create_point_cloud_color(depth_image, normal_image, albedo_image, camera_matrix, transform_matrix)
+    points = points * 0.99
+    origins = origins * 0.99
     scale = 1 << q_depth
     half_scale = scale >> 1
     points = points * scale + half_scale
