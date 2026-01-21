@@ -26,7 +26,8 @@ def read_image(image_path):
 
 def generate_directions(W, H, cx, cy, fx, fy, device = 'cuda'):
     i, j = torch.meshgrid(torch.arange(W, dtype=torch.float32, device=device) + 0.5, torch.arange(H, dtype=torch.float32, device=device) + 0.5, indexing='xy')
-    directions = torch.stack([(i - cx) / fx, -(j - cy) / fy, -torch.ones_like(i)], dim=-1)
+    directions = torch.stack([-(i - cx) / fx, -(j - cy) / fy, torch.ones_like(i)], dim=-1) # pytorch3d camera coordinate system
+    # directions = torch.stack([(i - cx) / fx, -(j - cy) / fy, -torch.ones_like(i)], dim=-1)
     return directions
 
 def generate_rays(camera_matrix: torch.Tensor, transform_matrix: torch.Tensor):
