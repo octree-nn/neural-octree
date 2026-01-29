@@ -358,9 +358,9 @@ class UNet(torch.nn.Module):
         self.encoder_channel = [32, 32, 64, 128, 256]
         # self.decoder_channel = [256, 256, 128, 96, 96]
         # single decoder
-        self.decoder_channel = [256, 256]
+        self.decoder_channel = [256, 256, 128]
         self.encoder_blocks = [2, 3, 4, 6]
-        self.decoder_blocks = [2]
+        self.decoder_blocks = [2, 2]
         self.bottleneck = 1
         self.resblk = OctreeBnResBlock2
 
@@ -481,11 +481,11 @@ class NeuralIntersectionModel(nn.Module):
         super().__init__()
         self.in_channels = in_channels
         self.feature_model = UNet(in_channels=self.in_channels)
-        self.renderer_model = VoxelRendererModel()
+        self.renderer_model = VoxelRendererModel(f_dim=16)
 
     def forward(self, data: torch.Tensor, octree: Octree, depth: int, pin: torch.Tensor, direction: torch.Tensor, voxel_indices: torch.Tensor) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] | Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         vert_feat = self.feature_model(data, octree, depth)
-        query_d = 6
+        query_d = 7
         n_vertices, vert_indexes = octree.compute_vertices(query_d)
         assert vert_feat.shape[0] == vert_indexes.shape[0]
         all_vertieces = torch.zeros((n_vertices * 8, vert_feat.shape[1] // 8 + 1), dtype=vert_feat.dtype, device=vert_feat.device)
@@ -601,4 +601,4 @@ class PNHLoss(nn.Module):
         norm_loss = F.l1_loss(pred_norm * mask_unsqueezed, tgt_norm * mask_unsqueezed)
         hit_loss = F.binary_cross_entropy(pred_hit, mask)
         
-        return pos_loss + norm_loss + hit_loss
+        return 2*pos_loss + norm_loss + 2*hit_loss

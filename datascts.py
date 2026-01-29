@@ -80,7 +80,7 @@ class ReadNpz:
     self.has_normal = has_normal
     self.has_label = has_label
 
-  def __call__(self, filename: str, q_depth=6):
+  def __call__(self, filename: str, q_depth=7):
     #TODO: read point cloud and normal/rgb/pos from .png file
     # raw = np.load(filename)
     # 把filename的文件名替换为pcd.pth, 保留前面的路径不变，然后用torch.load读取

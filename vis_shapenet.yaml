@@ -2,20 +2,22 @@ SOLVER:
   # gpu: 1, 2, 7
   # gpu: 0, 3, 4, 5
   # gpu: 3, 
-  gpu: 1, 
-  # gpu: 4, 5, 6, 7
+  # gpu: 1, 
+  gpu: 4, 5, 6, 7
   # gpu: 0, 1, 2, 3
-  # gpu: 0,
+  # gpu: 4,
   # run: best_view
-  # run: train
+  run: train
   # run: test
-  run: render
+  # run: render
   type: adamw
   # empty_cache: false
 
+  # logdir: logs/d10-6_lr0005
   # logdir: logs/d6_lr0005_0118
-  logdir: logs/d6_lr001
-  max_epoch: 80
+  logdir: logs/d7_2h2ploss
+  # logdir: logs/d6_lr001
+  max_epoch: 100
   test_every_epoch: 5
   clip_grad: 1.0
   lr_type: cos_warmup
@@ -23,9 +25,9 @@ SOLVER:
   warmup_init: 0.0005
   # milestones: (30,60)
   ckpt_num: 20
-  port: 12355
+  port: 12356
   lr: 0.005
-  weight_decay: 0.00001
+  weight_decay: 0.00000
   save_pred: False
   pin_memory: false
 
@@ -89,13 +91,13 @@ DATA:
     # location: cache/depth5/02958343_car
     # location: /home/wangjh/02958343/render_16views
     # location: /home/wangjh/render_shapenet_results/02958343/render_16views
-    # location: /mnt/sdc/wangjh/pytorch3d_render_colmap/render_shapenet_results/02958343/render_16views
-    location: /mnt/sdc/wangjh/pytorch3d_render_colmap/test_render4
+    location: /mnt/sdc/wangjh/pytorch3d_render_colmap/render_shapenet_results/02958343/render_16views
+    # location: /mnt/sdc/wangjh/pytorch3d_render_colmap/test_render4
     # location: /data/wangjh/render_shapenet_results/02958343/render_16views
     # location: /home/wangjh/render_16views
     # filelist: /data/wangjh/NeuOctree_1208/cache/depth5/02958343_car/filelist/train.txt
     # filelist: test.txt
-    filelist: train1.txt
+    filelist: test.txt
     # filelist: data/ShapeNet/ShapeNet_NV_simplified_with_normal/filelist/best_view.txt
     batch_size: 1
     shuffle: False
