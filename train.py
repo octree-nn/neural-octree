@@ -10,7 +10,8 @@ from octree import merge_octrees
 
 from datascts import get_shapenet_dataset, generate_camera_matrices
 from models import NeuralIntersectionModel, get_embedder, LocalPositionEncoder
-from models import PNHLoss as IntersectionLoss 
+# from models import PNHLoss as IntersectionLoss 
+from models import PNCHLoss as IntersectionLoss
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 from thsolver.tracker import AverageTracker
 from thsolver.sampler import InfSampler, DistributedInfSampler
@@ -155,37 +156,37 @@ class VisSolver(Solver):
         # query_pts = torch.cat([points.points, points.batch_id], dim=1)
         # viewdirs = self.embedder(viewdirs.view(-1, 3))
         tgt_normal_map = self.remapping_image(labels, normals, fill=0)
-        # tgt_color_map = self.remapping_image(labels, colors, fill=0)
+        tgt_color_map = self.remapping_image(labels, colors, fill=0)
         tgt_local_pos = self.local_position_encoder.encode(positions)
         directions = F.normalize(pouts - pins, dim=-1)
         
         pred_intersects = self.model(input_feature, octree, octree.depth, pins, directions, indices)
-        # tgt_intersects = (tgt_local_pos, normals, colors, hits)
-        tgt_intersects = (tgt_local_pos, normals, hits)
-        # tgt_maps = (tgt_normal_map, tgt_color_map)
-        # return pred_intersects, tgt_intersects, tgt_maps, labels
-        return pred_intersects, tgt_intersects, tgt_normal_map, labels
+        tgt_intersects = (tgt_local_pos, normals, colors, hits)
+        # tgt_intersects = (tgt_local_pos, normals, hits)
+        tgt_maps = (tgt_normal_map, tgt_color_map)
+        return pred_intersects, tgt_intersects, tgt_maps, labels
+        # return pred_intersects, tgt_intersects, tgt_normal_map, labels
     
     def train_step(self, batch, epoch):
         batch = self.process_batch(batch, self.FLAGS.DATA.train)
         pred_intersects, tgt_intersects, tgt_maps, labels = self.model_forward(batch)
-        # loss, pred_norm_map, pred_color_map = self.loss_function(pred_intersects, tgt_intersects, tgt_maps, labels, epoch)
-        loss, pred_norm_map = self.loss_function(pred_intersects, tgt_intersects, tgt_maps, labels, epoch)
+        loss, pred_norm_map, pred_color_map = self.loss_function(pred_intersects, tgt_intersects, tgt_maps, labels, epoch)
+        # loss, pred_norm_map = self.loss_function(pred_intersects, tgt_intersects, tgt_maps, labels, epoch)
         # loss = self.loss_function(pred_intersects, tgt_intersects, tgt_maps, labels, epoch)
-        # psnr_color, psnr_norm = self.accuracy((pred_norm_map, pred_color_map), tgt_maps)
-        psnr_norm = self.accuracy(pred_norm_map, tgt_maps)
-        # return {'train/loss': loss, 'train/psnr_c': psnr_color, 'train/psnr_n': psnr_norm}
-        return {'train/loss': loss, 'train/psnr_n': psnr_norm}
+        psnr_color, psnr_norm = self.accuracy((pred_norm_map, pred_color_map), tgt_maps)
+        # psnr_norm = self.accuracy(pred_norm_map, tgt_maps)
+        return {'train/loss': loss, 'train/psnr_c': psnr_color, 'train/psnr_n': psnr_norm}
+        # return {'train/loss': loss, 'train/psnr_n': psnr_norm}
         # return {'train/loss': loss}
     
     def test_step(self, batch, iteration):   
         batch = self.process_batch(batch, self.FLAGS.DATA.test)
         with torch.no_grad():
             pred_intersects, tgt_intersects, tgt_maps, labels = self.model_forward(batch)
-        # loss, pred_norm_map, pred_color_map = self.test_loss_function(pred_intersects, tgt_intersects, tgt_maps, labels)
-        loss, pred_norm_map = self.test_loss_function(pred_intersects, tgt_intersects, tgt_maps, labels)
-        # psnr_color, psnr_norm = self.accuracy((pred_norm_map, pred_color_map), tgt_maps)
-        psnr_norm = self.accuracy(pred_norm_map, tgt_maps)
+        loss, pred_norm_map, pred_color_map = self.test_loss_function(pred_intersects, tgt_intersects, tgt_maps, labels)
+        # loss, pred_norm_map = self.test_loss_function(pred_intersects, tgt_intersects, tgt_maps, labels)
+        psnr_color, psnr_norm = self.accuracy((pred_norm_map, pred_color_map), tgt_maps)
+        # psnr_norm = self.accuracy(pred_norm_map, tgt_maps)
         # save pred_norm_map and pred_color_map as images if needed
         # if self.FLAGS.SOLVER.save_pred and self.is_master:
         #     save_dir = os.path.join(self.FLAGS.SOLVER.logdir, 'gt_images')
@@ -199,8 +200,8 @@ class VisSolver(Solver):
         #     color_pil = Image.fromarray(color_image)
         #     norm_pil.save(os.path.join(save_dir, 'norm_%06d.png' % iter_num))
         #     color_pil.save(os.path.join(save_dir, 'color_%06d.png' % iter_num))
-        # return {'test/loss': loss, 'test/psnr_c': psnr_color, 'test/psnr_n': psnr_norm}
-        return {'test/loss': loss, 'test/psnr_n': psnr_norm}
+        return {'test/loss': loss, 'test/psnr_c': psnr_color, 'test/psnr_n': psnr_norm}
+        # return {'test/loss': loss, 'test/psnr_n': psnr_norm}
     
     def eval_step(self, batch):
         pass
@@ -208,102 +209,100 @@ class VisSolver(Solver):
     def test_loss_function(self, pred_intersects, tgt_intersect, tgt_maps, labels):
         i_loss_fn = IntersectionLoss()
         # ssim_loss = StructuralSimilarityIndexMeasure(data_range=1.0).to(labels.device)
-        # tgt_normal_map, tgt_color_map = tgt_maps
-        tgt_normal_map = tgt_maps
+        tgt_normal_map, tgt_color_map = tgt_maps
+        # tgt_normal_map = tgt_maps
         loss = 0.0
-        # pred_pos, pred_norm, pred_color, pred_hit = pred_intersects
-        pred_pos, pred_norm, pred_hit = pred_intersects
-        # tgt_pos, tgt_norm, tgt_color, tgt_hit = tgt_intersect
-        tgt_pos, tgt_norm, tgt_hit = tgt_intersect
+        pred_pos, pred_norm, pred_color, pred_hit = pred_intersects
+        # pred_pos, pred_norm, pred_hit = pred_intersects
+        tgt_pos, tgt_norm, tgt_color, tgt_hit = tgt_intersect
+        # tgt_pos, tgt_norm, tgt_hit = tgt_intersect
         pred_hit_mask = pred_hit > 0.5
         # tgt_hit_mask = tgt_hit > 0.5
         # pred_hit_mask = tgt_hit_mask
         if pred_hit_mask.any():
             pred_hit_norm = pred_norm[pred_hit_mask]
-            # pred_hit_norm = tgt_norm[pred_hit_mask]
-            # pred_hit_color = pred_color[pred_hit_mask]
-            # pred_hit_color = tgt_color[pred_hit_mask]
+            pred_hit_color = pred_color[pred_hit_mask]
             pred_hit_rays = labels[pred_hit_mask]
             unique_ray_mask = torch.cat([torch.tensor([1], dtype=torch.bool, device=labels.device), pred_hit_rays[1:] != pred_hit_rays[:-1]], dim=0)
             unique_pred_hit_norm = pred_hit_norm[unique_ray_mask]
-            # unique_pred_hit_color = pred_hit_color[unique_ray_mask]
+            unique_pred_hit_color = pred_hit_color[unique_ray_mask]
             unique_pred_hit_rays = pred_hit_rays[unique_ray_mask]
             pred_normal_map = self.remapping_image(unique_pred_hit_rays, unique_pred_hit_norm, fill=0)
-            # pred_color_map = self.remapping_image(unique_pred_hit_rays, unique_pred_hit_color, fill=0)
+            pred_color_map = self.remapping_image(unique_pred_hit_rays, unique_pred_hit_color, fill=0)
         else:
             pred_normal_map = torch.full_like(tgt_normal_map, fill_value=0)
-            # pred_color_map = torch.full_like(tgt_color_map, fill_value=0)
+            pred_color_map = torch.full_like(tgt_color_map, fill_value=0)
         ssim_norm = 1.0 - self.ssim_loss(pred_normal_map.permute(2,0,1).unsqueeze(0), tgt_normal_map.permute(2,0,1).unsqueeze(0))
-        # ssim_color = 1.0 - self.ssim_loss(pred_color_map.permute(2,0,1).unsqueeze(0), tgt_color_map.permute(2,0,1).unsqueeze(0))
+        ssim_color = 1.0 - self.ssim_loss(pred_color_map.permute(2,0,1).unsqueeze(0), tgt_color_map.permute(2,0,1).unsqueeze(0))
         iloss = i_loss_fn(pred_intersects, tgt_intersect)
-        # loss = iloss + ssim_norm * 0.3 + ssim_color * 0.3
-        loss = iloss + ssim_norm * 0.3
-        # return loss, pred_normal_map, pred_color_map
-        return loss, pred_normal_map
+        loss = iloss + ssim_norm * 0.3 + ssim_color * 0.3
+        # loss = iloss + ssim_norm * 0.3
+        return loss, pred_normal_map, pred_color_map
+        # return loss, pred_normal_map
 
     def loss_function(self, pred_intersects, tgt_intersect, tgt_maps, labels, epoch):
         i_loss_fn = IntersectionLoss()
         # ssim_loss = StructuralSimilarityIndexMeasure(data_range=1.0).to(labels.device)
-        loss_weights = self.get_gaussian_loss_weights(epoch)
-        # tgt_normal_map, tgt_color_map = tgt_maps
-        tgt_normal_map = tgt_maps
+        loss_weights = self.get_gaussian_loss_weights(epoch, total_epochs=self.FLAGS.SOLVER.max_epoch, num_groups=len(pred_intersects), sigma=1, steepness=6)
+        tgt_normal_map, tgt_color_map = tgt_maps
+        # tgt_normal_map = tgt_maps
         loss = 0.0
         for loss_weight, intersect in list(zip(loss_weights, pred_intersects)):
-            # pred_pos, pred_norm, pred_color, pred_hit = intersect
-            pred_pos, pred_norm, pred_hit = intersect
+            pred_pos, pred_norm, pred_color, pred_hit = intersect
+            # pred_pos, pred_norm, pred_hit = intersect
             pred_hit_mask = pred_hit > 0.5
             if pred_hit_mask.any():
                 # pred_hit_pos = pred_pos[pred_hit_mask]
                 pred_hit_norm = pred_norm[pred_hit_mask]
-                # pred_hit_color = pred_color[pred_hit_mask]
+                pred_hit_color = pred_color[pred_hit_mask]
                 pred_hit_rays = labels[pred_hit_mask]
                 unique_ray_mask = torch.cat([torch.tensor([1], dtype=torch.bool, device=labels.device), pred_hit_rays[1:] != pred_hit_rays[:-1]], dim=0)
                 # unique_pred_hit_pos = pred_hit_pos[unique_ray_mask]
                 unique_pred_hit_norm = pred_hit_norm[unique_ray_mask]
-                # unique_pred_hit_color = pred_hit_color[unique_ray_mask]
+                unique_pred_hit_color = pred_hit_color[unique_ray_mask]
                 unique_pred_hit_rays = pred_hit_rays[unique_ray_mask]
                 # pred_position_map = dataset.remapping_image(unique_pred_hit_rays, unique_pred_hit_pos, fill=0)
                 pred_normal_map = self.remapping_image(unique_pred_hit_rays, unique_pred_hit_norm, fill=0)
-                # pred_color_map = self.remapping_image(unique_pred_hit_rays, unique_pred_hit_color, fill=0)
+                pred_color_map = self.remapping_image(unique_pred_hit_rays, unique_pred_hit_color, fill=0)
             else:
                 # pred_position_map = torch.zeros_like(tgt_position_map)
                 pred_normal_map = torch.full_like(tgt_normal_map, fill_value=0)
-                # pred_color_map = torch.full_like(tgt_color_map, fill_value=0)
+                pred_color_map = torch.full_like(tgt_color_map, fill_value=0)
             # ssim_pos = 1.0 - ssim_loss(pred_position_map.permute(2,0,1).unsqueeze(0), tgt_position_map.permute(2,0,1).unsqueeze(0))
             ssim_norm = 1.0 - self.ssim_loss(pred_normal_map.permute(2,0,1).unsqueeze(0), tgt_normal_map.permute(2,0,1).unsqueeze(0))
-            # ssim_color = 1.0 - self.ssim_loss(pred_color_map.permute(2,0,1).unsqueeze(0), tgt_color_map.permute(2,0,1).unsqueeze(0))
+            ssim_color = 1.0 - self.ssim_loss(pred_color_map.permute(2,0,1).unsqueeze(0), tgt_color_map.permute(2,0,1).unsqueeze(0))
             # criterion = torch.nn.CrossEntropyLoss()
             iloss = i_loss_fn(intersect, tgt_intersect)
-            # loss = (iloss + ssim_norm * 0.3 + ssim_color * 0.3) * loss_weight + loss
-            loss = (iloss + ssim_norm * 0.3) * loss_weight + loss
+            loss = (iloss + ssim_norm * 0.3 + ssim_color * 1) * loss_weight + loss
+            # loss = (iloss + ssim_norm * 0.3) * loss_weight + loss
             # loss = iloss * loss_weight + loss
-        # return loss, pred_normal_map, pred_color_map
-        return loss, pred_normal_map
+        return loss, pred_normal_map, pred_color_map
+        # return loss, pred_normal_map
         # return loss
     
     def accuracy(self, pred_maps, tgt_maps):
-        # pred_norm_map, pred_color_map = pred_maps
-        pred_norm_map = pred_maps
-        # tgt_norm_map, tgt_color_map = tgt_maps
-        tgt_norm_map = tgt_maps
+        pred_norm_map, pred_color_map = pred_maps
+        # pred_norm_map = pred_maps
+        tgt_norm_map, tgt_color_map = tgt_maps
+        # tgt_norm_map = tgt_maps
         # cal psnr
-        # mse_color = torch.mean((pred_color_map - tgt_color_map) ** 2)
-        # psnr_color = -10.0 * torch.log10(mse_color + 1e-8)
+        mse_color = torch.mean((pred_color_map - tgt_color_map) ** 2)
+        psnr_color = -10.0 * torch.log10(mse_color + 1e-8)
         mse_norm = torch.mean((pred_norm_map - tgt_norm_map) ** 2)
         psnr_norm = -10.0 * torch.log10(mse_norm + 1e-8)
-        # return psnr_color, psnr_norm
-        return psnr_norm
+        return psnr_color, psnr_norm
+        # return psnr_norm
         # pred = visibilities.argmax(dim=-1)
         # correct = pred.eq(labels).float().mean()
         # return correct
     
-    def get_gaussian_loss_weights(self, epoch, total_eopchs = 100, num_groups = 6, sigma = 0.2, steepness = 6):
-        progress = (epoch / total_eopchs - 0.5) * 2 + 0.5
+    def get_gaussian_loss_weights(self, epoch, total_epochs = 100, num_groups = 6, sigma = 1, steepness = 6):
+        progress = (epoch / total_epochs - 0.5) * 2 + 0.5
         def sigmoid(x):
             return 1 / (1 + math.exp(-steepness * (x - 0.5)))
         mu = (sigmoid(progress) - 0.5) / (2 * sigmoid(1) - 1) + 0.5
         x = torch.linspace(0, 1, num_groups)
-        group_weights = torch.exp(-torch.square((x - mu) / sigma) / 2)
+        group_weights = torch.exp(-torch.square((x - mu) / sigma) / 2) + 0.5
         group_weights_normalized = group_weights / torch.sum(group_weights)
         return group_weights_normalized
 
@@ -423,22 +422,22 @@ class VisSolver(Solver):
                 batch['hits'], batch['positions'], batch['normals'], batch['colors'], batch['labels']
             hit_mask = hits > 0.1
             rays = labels[hit_mask]
-            pos = (positions[hit_mask] * (255 / 64)).byte()
+            pos = (positions[hit_mask] * (255 / 128)).byte()
             norms = ((normals[hit_mask] + 1.0) / 2.0 * 255).byte()
-            # cols = (colors[hit_mask] * 255).byte()
+            cols = (colors[hit_mask] * 255).byte()
             H = W = 512
             gt_position_map = torch.zeros((H * W, 3), dtype=torch.uint8, device=device)
             gt_normal_map = torch.zeros((H * W, 3), dtype=torch.uint8, device=device)
-            # gt_col_map = torch.zeros((H * W, 3), dtype=torch.uint8, device=device)
+            gt_col_map = torch.zeros((H * W, 3), dtype=torch.uint8, device=device)
             gt_hit_map = torch.zeros((H * W, 3), dtype=torch.uint8, device=device)
 
             gt_position_map[rays] = pos
             gt_normal_map[rays] = norms
-            # gt_col_map[rays] = cols
+            gt_col_map[rays] = cols
             gt_hit_map[rays] = 255
 
-            # gt_img = torch.cat([gt_position_map.view(H, W, 3), gt_normal_map.view(H, W, 3), gt_col_map.view(H, W, 3), gt_hit_map.view(H, W, 3)], dim=1)
-            gt_img = torch.cat([gt_position_map.view(H, W, 3), gt_normal_map.view(H, W, 3), gt_hit_map.view(H, W, 3)], dim=1)
+            gt_img = torch.cat([gt_position_map.view(H, W, 3), gt_normal_map.view(H, W, 3), gt_col_map.view(H, W, 3), gt_hit_map.view(H, W, 3)], dim=1)
+            # gt_img = torch.cat([gt_position_map.view(H, W, 3), gt_normal_map.view(H, W, 3), gt_hit_map.view(H, W, 3)], dim=1)
             input_feature = self.get_input_feature(batch['octree'], self.FLAGS.MODEL)
             # print(input_feature.shape)
             # query_pts = torch.cat([points.points, points.batch_id], dim=1)
@@ -449,14 +448,14 @@ class VisSolver(Solver):
             directions = F.normalize(pouts - pins, dim=-1)
             vert_feat = self.model.feature_model(input_feature, octree, octree.depth)
             # print(vert_feat.shape)
-            n_vertices, vert_indexes = octree.compute_vertices(6)
+            n_vertices, vert_indexes = octree.compute_vertices(7)
             assert vert_feat.shape[0] == vert_indexes.shape[0]
             all_vertieces = torch.zeros((n_vertices * 8, vert_feat.shape[1] // 8 + 1), dtype=vert_feat.dtype, device=vert_feat.device)
             vert_indexes_expanded = vert_indexes * 8 + torch.arange(8, device=vert_indexes.device).unsqueeze(0)
             vert_feat_with_i = torch.cat([vert_feat.view(vert_indexes.shape[0] * 8, -1), torch.ones((vert_indexes.shape[0] * 8, 1), device=vert_feat.device)], dim=1)
             all_vertieces[vert_indexes_expanded.view(-1)] = vert_feat_with_i.view(vert_indexes.shape[0] * 8, -1)
             average_feat = all_vertieces.view(-1,8, vert_feat.shape[1] // 8 + 1)[:, :, :-1].sum(dim=1) / all_vertieces.view(-1,8, vert_feat.shape[1] // 8 + 1)[:, :, -1:].sum(dim=1)
-            renderer = Renderer(self.model.renderer_model, average_feat, vert_indexes, octree, transform_matrices)
+            renderer = Renderer(self.model.renderer_model, average_feat, vert_indexes, octree, transform_matrices, depth=7)
             output_dir = os.path.join(self.FLAGS.SOLVER.logdir, 'rendering_views')
             os.makedirs(output_dir, exist_ok=True)
             renderer.render(save_images=True, save_video=False, output_dir=output_dir, object_name=object_name, gt_img=[gt_img], frame_ids=[frame_id])

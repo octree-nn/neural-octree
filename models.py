@@ -481,7 +481,7 @@ class NeuralIntersectionModel(nn.Module):
         super().__init__()
         self.in_channels = in_channels
         self.feature_model = UNet(in_channels=self.in_channels)
-        self.renderer_model = VoxelRendererModel(f_dim=16)
+        self.renderer_model = VoxelRendererModel(f_dim=16, n_iters=4)
 
     def forward(self, data: torch.Tensor, octree: Octree, depth: int, pin: torch.Tensor, direction: torch.Tensor, voxel_indices: torch.Tensor) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] | Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         vert_feat = self.feature_model(data, octree, depth)
@@ -501,7 +501,7 @@ class NeuralIntersectionModel(nn.Module):
         return intersection
 
 class VoxelRendererModel(nn.Module):
-    def __init__(self, f_dim = 32, hidden_dim = 128, out_dim = 7, n_iters=4):
+    def __init__(self, f_dim = 32, hidden_dim = 128, out_dim = 10, n_iters=4):
         super().__init__()
         self.n_iters = n_iters
         self.embedding = nn.Linear(f_dim + out_dim + 3, hidden_dim)
@@ -514,7 +514,7 @@ class VoxelRendererModel(nn.Module):
         self.output_layer = nn.Linear(hidden_dim, out_dim)
 
         self.init_normal = nn.Parameter(torch.zeros((1, 3), dtype=torch.float), requires_grad=True)
-        # self.init_color = nn.Parameter(torch.zeros((1, 3), dtype=torch.float), requires_grad=True)
+        self.init_color = nn.Parameter(torch.zeros((1, 3), dtype=torch.float), requires_grad=True)
         self.init_hit_prob = nn.Parameter(torch.zeros((1,), dtype=torch.float), requires_grad=True)
         self.init_hidden = nn.Parameter(torch.zeros((1, hidden_dim), dtype=torch.float), requires_grad=True)
 
@@ -526,7 +526,7 @@ class VoxelRendererModel(nn.Module):
         B = pin.shape[0]
         position = pin
         normal = self.init_normal.expand(B, -1)
-        # color = self.init_color.expand(B, -1)
+        color = self.init_color.expand(B, -1)
         hit_prob = self.init_hit_prob.expand(B)
         hidden = self.init_hidden.expand(B, -1)
 
@@ -535,27 +535,27 @@ class VoxelRendererModel(nn.Module):
         for i in range(self.n_iters):
             feature = self.get_scene_feature_for_points(vert_feat, position)
             # all_combined = torch.cat([feature, direction, normal, hit_prob.unsqueeze(-1)], dim=1)
-            # all_combined = torch.cat([feature, direction, position, normal, color, hit_prob.unsqueeze(-1)], dim=1)
-            all_combined = torch.cat([feature, direction, position, normal, hit_prob.unsqueeze(-1)], dim=1)
+            all_combined = torch.cat([feature, direction, position, normal, color, hit_prob.unsqueeze(-1)], dim=1)
+            # all_combined = torch.cat([feature, direction, position, normal, hit_prob.unsqueeze(-1)], dim=1)
             all_embedded = self.embedding(all_combined)
             hidden = hidden + self.hidden2hidden(all_embedded)
             output = self.output_layer(hidden)
             position = torch.sigmoid(output[:, :3])
             normal = F.normalize(output[:, 3:6], dim=1)
-            # color = torch.sigmoid(output[:, 6:9])
-            # hit_prob = F.sigmoid(output[:, 9])
-            hit_prob = torch.sigmoid(output[:, 6])
+            color = torch.sigmoid(output[:, 6:9])
+            hit_prob = F.sigmoid(output[:, 9])
+            # hit_prob = torch.sigmoid(output[:, 6])
             #position must be on the ray:
             position = pin + direction * ((position - pin) * direction).sum(dim=1, keepdim=True)
             if self.training:
-                # outputs.append((position, normal, color, hit_prob))
-                outputs.append((position, normal, hit_prob))
+                outputs.append((position, normal, color, hit_prob))
+                # outputs.append((position, normal, hit_prob))
 
         if self.training:
             return outputs
         else:
-            # return position, normal, color, hit_prob
-            return position, normal, hit_prob
+            return position, normal, color, hit_prob
+            # return position, normal, hit_prob
 
 class LocalPositionEncoder:
     def __init__(self, depth: int):
@@ -580,10 +580,15 @@ class PNCHLoss(nn.Module):
         
         pos_loss = F.l1_loss(pred_pos * mask_unsqueezed, tgt_pos * mask_unsqueezed)
         norm_loss = F.l1_loss(pred_norm * mask_unsqueezed, tgt_norm * mask_unsqueezed)
-        col_loss = F.l1_loss(pred_col * mask_unsqueezed, tgt_col * mask_unsqueezed)
+        # relative l2 loss for color
+        relative_col_loss = F.mse_loss(pred_col * mask_unsqueezed, tgt_col * mask_unsqueezed) / (F.mse_loss(tgt_col * mask_unsqueezed, torch.zeros_like(tgt_col)) + 1e-8)        
+        # col_loss = F.l1_loss(pred_col * mask_unsqueezed, tgt_col * mask_unsqueezed)
+
+        # print(pred_col.shape, tgt_col.shape, mask_unsqueezed.shape)
         hit_loss = F.binary_cross_entropy(pred_hit, mask)
         
-        return pos_loss + norm_loss + col_loss + hit_loss
+        # return pos_loss + norm_loss + 2*col_loss + hit_loss
+        return pos_loss + norm_loss + 2*relative_col_loss + hit_loss
 
 
 class PNHLoss(nn.Module):

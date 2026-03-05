@@ -2,20 +2,22 @@ SOLVER:
   # gpu: 1, 2, 7
   # gpu: 0, 3, 4, 5
   # gpu: 3, 
-  # gpu: 1, 
-  gpu: 4, 5, 6, 7
+  gpu: 0, 
+  # gpu: 4, 5, 6, 7
   # gpu: 0, 1, 2, 3
   # gpu: 4,
   # run: best_view
-  run: train
+  # run: train
   # run: test
-  # run: render
+  run: render
   type: adamw
   # empty_cache: false
 
   # logdir: logs/d10-6_lr0005
   # logdir: logs/d6_lr0005_0118
-  logdir: logs/d7_2h2ploss
+  # logdir: logs/d7_rl2c_n3_0228
+  # logdir: logs/d7_2c_niter3
+  logdir: logs/d7_rl2c_n3_1ssim_gw1_0304
   # logdir: logs/d6_lr001
   max_epoch: 100
   test_every_epoch: 5
@@ -25,8 +27,8 @@ SOLVER:
   warmup_init: 0.0005
   # milestones: (30,60)
   ckpt_num: 20
-  port: 12356
-  lr: 0.005
+  port: 12355
+  lr: 0.01
   weight_decay: 0.00000
   save_pred: False
   pin_memory: false
@@ -98,6 +100,7 @@ DATA:
     # filelist: /data/wangjh/NeuOctree_1208/cache/depth5/02958343_car/filelist/train.txt
     # filelist: test.txt
     filelist: test.txt
+    # filelist: train.txt
     # filelist: data/ShapeNet/ShapeNet_NV_simplified_with_normal/filelist/best_view.txt
     batch_size: 1
     shuffle: False
@@ -115,13 +118,13 @@ MODEL:
   # upsample: 'nearest'   # The method used for upsampling
   # interp:   'linear'    # The interplation method: linear or nearest
   # stages: 7
-  # channel: 9
-  channel: 6
+  channel: 9
+  # channel: 6
   vp_ch: 63
   nout: 2
   multires: 10
-  # feature: LPF
-  feature: LP
+  feature: LPF
+  # feature: LP
 
 
 LOSS:

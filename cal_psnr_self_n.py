@@ -13,8 +13,10 @@ def read_tgt_image(object_name: str, config_name: str, idx: int):
     # img = cv2.imread(f'./training_views/{config_name}/{object_name}/{idx}.png')
     imgdir = f'./logs/{config_name}/rendering_views/{object_name}/{idx:03d}.png'
     img = cv2.imread(imgdir)
-    norm = img[512:, 512:1024]
-    not_hit_mask = img[512:, 1024:].astype(np.int32).sum(axis=-1) < 127 * 3
+    # norm = img[512:, 512:1024]
+    norm = img[512:, 1024:1536]
+    # not_hit_mask = img[512:, 1024:].astype(np.int32).sum(axis=-1) < 127 * 3
+    not_hit_mask = img[512:, 1536:].astype(np.int32).sum(axis=-1) < 127 * 3
     # print(not_hit_mask.sum())
     norm[not_hit_mask] = 0
     norm = norm.astype(np.float64)
@@ -26,8 +28,10 @@ def read_pred_image(object_name: str, config_name: str, idx: int):
     # img = cv2.imread(f'./training_views/{config_name}/{object_name}/{idx}.png')
     imgdir = f'./logs/{config_name}/rendering_views/{object_name}/{idx:03d}.png'
     img = cv2.imread(imgdir)
-    norm = img[:512, 512:1024]
-    not_hit_mask = img[:512, 1024:].astype(np.int32).sum(axis=-1) < 127 * 3
+    # norm = img[:512, 512:1024]
+    norm = img[:512, 1024:1536]
+    # not_hit_mask = img[:512, 1024:].astype(np.int32).sum(axis=-1) < 127 * 3
+    not_hit_mask = img[:512, 1536:].astype(np.int32).sum(axis=-1) < 127 * 3
     # print(not_hit_mask.sum())
     norm[not_hit_mask] = 0
     norm = norm.astype(np.float64)

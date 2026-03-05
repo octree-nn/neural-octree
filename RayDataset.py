@@ -250,7 +250,8 @@ class Renderer:
         p_query = ((pin + pout) / 2).long()
         # torch.cat([p_query, torch.zeros((p_query.shape[0], 1), dtype=torch.long, device=device)], dim=-1)
         p_query_b = torch.cat([p_query, torch.zeros((p_query.shape[0], 1), dtype=torch.long, device=device)], dim=-1)
-        all_index = sparse_voxels.search_xyzb(p_query_b, depth=6, nempty=True)
+        # all_index = sparse_voxels.search_xyzb(p_query_b, depth=6, nempty=True)
+        all_index = sparse_voxels.search_xyzb(p_query_b, depth=depth, nempty=True)
         valid_mask = torch.nonzero(all_index != -1, as_tuple=False).squeeze(-1)
         
         indices = all_index[valid_mask]
@@ -261,7 +262,7 @@ class Renderer:
 
         pred_pos = []
         pred_norm = []
-        # pred_color = []
+        pred_color = []
         hit_ray_labels = []
 
         # 光线交错排列
@@ -280,19 +281,19 @@ class Renderer:
                     # print(indices.shape)
                     query_v_indexes = v_idxs[indices].view(-1, 2, 2, 2)
                     query_v_feats = v_feats[query_v_indexes]
-                    # pos, norm, color, hit = model(pin, F.normalize(pout - pin, dim=1), query_v_feats)
-                    pos, norm, hit = model(pin, F.normalize(pout - pin, dim=1), query_v_feats)
+                    pos, norm, color, hit = model(pin, F.normalize(pout - pin, dim=1), query_v_feats)
+                    # pos, norm, hit = model(pin, F.normalize(pout - pin, dim=1), query_v_feats)
                     hit_mask = hit > 0.5
                     if hit_mask.any():
                         pos = local_position_encode.decode(pos[hit_mask], cxyz[hit_mask]) # pos[hit_mask] + cxyz[hit_mask]
                         norm = norm[hit_mask]
-                        # color = color[hit_mask]
+                        color = color[hit_mask]
                         labels = labels[hit_mask]
                         labels_sorted, sort_indices = torch.sort(labels, stable=True)
                         unique_indices = sort_indices[torch.cat([torch.tensor([True], dtype=torch.bool, device=device), labels_sorted[1:] != labels_sorted[:-1]])]
                         pred_pos.append(pos[unique_indices])
                         pred_norm.append(norm[unique_indices])
-                        # pred_color.append(color[unique_indices])
+                        pred_color.append(color[unique_indices])
                         hit_ray_labels.append(labels[unique_indices])
                     break
 
@@ -312,8 +313,8 @@ class Renderer:
                 # 输入选择出来的光线-体素
                 query_v_indexes = v_idxs[chosen_indices].view(-1, 2, 2, 2)
                 query_v_feats = v_feats[query_v_indexes]
-                # pos, norm, color, hit = model(chosen_pin, F.normalize(chosen_pout - chosen_pin, dim=1), query_v_feats)
-                pos, norm, hit = model(chosen_pin, F.normalize(chosen_pout - chosen_pin, dim=1), query_v_feats)
+                pos, norm, color, hit = model(chosen_pin, F.normalize(chosen_pout - chosen_pin, dim=1), query_v_feats)
+                # pos, norm, hit = model(chosen_pin, F.normalize(chosen_pout - chosen_pin, dim=1), query_v_feats)
                 hit_mask = hit > 0.5
                 # pos_mask = pos[hit_mask]
                 # print(f'pos_mask min: {pos_mask.min(dim=0).values}, max: {pos_mask.max(dim=0).values}')
@@ -321,14 +322,14 @@ class Renderer:
                     pos = local_position_encode.decode(pos[hit_mask], chosen_cxyz[hit_mask]) # pos[hit_mask] + chosen_cxyz[hit_mask]
                     # print(f'pos min: {pos.min(dim=0).values}, max: {pos.max(dim=0).values}')
                     norm = norm[hit_mask]
-                    # color = color[hit_mask]
+                    color = color[hit_mask]
                     hit_rays = chosen_labels[hit_mask]
                     hit_rays_sorted, sort_indices = torch.sort(hit_rays, stable=True)
                     unique_indices = sort_indices[torch.cat([torch.tensor([True], dtype=torch.bool, device=device), hit_rays_sorted[1:] != hit_rays_sorted[:-1]])]
                     unique_hit_rays = hit_rays[unique_indices]
                     pred_pos.append(pos[unique_indices])
                     pred_norm.append(norm[unique_indices])
-                    # pred_color.append(color[unique_indices])
+                    pred_color.append(color[unique_indices])
                     hit_ray_labels.append(unique_hit_rays)
 
                     # 删除已经相交的光线
@@ -345,28 +346,28 @@ class Renderer:
         
         pos_img = torch.zeros((B, 3), dtype=torch.uint8, device=device)
         norm_img = torch.zeros((B, 3), dtype=torch.uint8, device=device)
-        # color_img = torch.zeros((B, 3), dtype=torch.uint8, device=device)
+        color_img = torch.zeros((B, 3), dtype=torch.uint8, device=device)
         hit_img = torch.zeros((B,), dtype=torch.uint8, device=device)
 
         if len(hit_ray_labels) > 0:
             pred_pos = torch.cat(pred_pos, dim=0)
             pred_norm = torch.cat(pred_norm, dim=0)
-            # pred_color = torch.cat(pred_color, dim=0)
+            pred_color = torch.cat(pred_color, dim=0)
             hit_ray_labels = torch.cat(hit_ray_labels)
 
             pos_img[hit_ray_labels] = (pred_pos * (255.0 / scale)).byte()
             # pos_img[hit_ray_labels] = (pred_pos * 255.0).byte()
             norm_img[hit_ray_labels] = ((pred_norm + 1) * 127.5).byte()
-            # color_img[hit_ray_labels] = (pred_color * 255.0).byte()
+            color_img[hit_ray_labels] = (pred_color * 255.0).byte()
             hit_img[hit_ray_labels] = 255
 
         pos_img = pos_img.reshape(H, W, 3)
         norm_img = norm_img.reshape(H, W, 3)
-        # color_img = color_img.reshape(H, W, 3)
+        color_img = color_img.reshape(H, W, 3)
         hit_img = hit_img.reshape(H, W, 1).repeat(1, 1, 3)
         # return torch.cat([pos_img, norm_img, hit_img], dim=1).cpu().numpy()
-        # return torch.cat([pos_img, norm_img, color_img, hit_img], dim=1)
-        return torch.cat([pos_img, norm_img, hit_img], dim=1)
+        return torch.cat([pos_img, norm_img, color_img, hit_img], dim=1)
+        # return torch.cat([pos_img, norm_img, hit_img], dim=1)
         # return torch.cat([pos_img, norm_img, color_img, hit_img], dim=1).cpu().numpy()
 
     @staticmethod
