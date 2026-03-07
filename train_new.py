@@ -39,7 +39,9 @@ class VisSolver(Solver):
             'ssim_norm': 0.3,
             'ssim_color': 1.0,
             'test_ssim_norm': 0.3,
-            'test_ssim_color': 0.3
+            'test_ssim_color': 1.0, 
+            'smoothness': 0.2, 
+            'constancy': 0.1
         }
 
     def get_model(self, flags):
@@ -177,7 +179,10 @@ class VisSolver(Solver):
         pred_normal_map = self.remapping_image(unique_pred_hit_rays, unique_pred_hit_norm, fill=0)
         pred_color_map = self.remapping_image(unique_pred_hit_rays, unique_pred_hit_color, fill=0)
         
-        return pred_normal_map, pred_color_map
+        image_mask = torch.zeros((pred_normal_map.shape[0] * pred_normal_map.shape[1]), dtype=torch.bool, device=pred_normal_map.device)
+        image_mask[unique_pred_hit_rays] = True
+        
+        return pred_normal_map, pred_color_map, image_mask.view(pred_normal_map.shape[0], pred_normal_map.shape[1])
 
     def _get_unique_ray_mask(self, rays):
         """获取每个光线的唯一命中点掩码"""
@@ -192,6 +197,84 @@ class VisSolver(Solver):
         tgt_permuted = tgt_map.permute(2, 0, 1).unsqueeze(0)
         return 1.0 - self.ssim_loss(pred_permuted, tgt_permuted)
 
+    def _color_smoothness_loss(self, color_map, mask=None):
+        """
+        计算颜色平滑度损失
+        
+        参数:
+            color_map: 预测的颜色图，形状为 [H, W, 3]
+            mask: 可选掩码，形状为 [H, W]，True表示有效像素
+            
+        返回:
+            smoothness_loss: 颜色平滑度损失
+        """
+        H, W, C = color_map.shape
+        
+        # 将颜色图转换为 [C, H, W] 格式
+        color_map_permuted = color_map.permute(2, 0, 1)
+        
+        # 计算水平和垂直方向的梯度
+        sobel_x_kernel = torch.tensor([[-1, 0, 1], 
+                                       [-2, 0, 2], 
+                                       [-1, 0, 1]], dtype=torch.float32, device=color_map.device).view(1, 1, 3, 3)
+        sobel_y_kernel = torch.tensor([[-1, -2, -1], 
+                                       [0, 0, 0], 
+                                       [1, 2, 1]], dtype=torch.float32, device=color_map.device).view(1, 1, 3, 3)
+        
+        # 对每个颜色通道计算梯度
+        grad_x_list = []
+        grad_y_list = []
+        
+        for c in range(C):
+            channel = color_map_permuted[c:c+1, :, :].unsqueeze(0)  # 形状: [1, 1, H, W]
+            grad_x = F.conv2d(channel, sobel_x_kernel, padding=1)
+            grad_y = F.conv2d(channel, sobel_y_kernel, padding=1)
+            grad_x_list.append(grad_x)
+            grad_y_list.append(grad_y)
+        
+        grad_x = torch.cat(grad_x_list, dim=1)  # 形状: [1, C, H, W]
+        grad_y = torch.cat(grad_y_list, dim=1)  # 形状: [1, C, H, W]
+        
+        # 计算梯度幅值
+        gradient_magnitude = torch.sqrt(grad_x**2 + grad_y**2 + 1e-8)
+        
+        if mask is not None:
+            # 扩展掩码以匹配梯度图的形状
+            mask_expanded = mask.unsqueeze(0).unsqueeze(0)  # 形状: [1, 1, H, W]
+            mask_expanded = mask_expanded.expand(1, C, H, W)
+            
+            # 只计算有效像素的梯度
+            valid_gradient = gradient_magnitude * mask_expanded
+            valid_count = mask_expanded.sum()
+            
+            if valid_count > 0:
+                loss = valid_gradient.sum() / valid_count
+            else:
+                loss = torch.tensor(0.0, device=color_map.device)
+        else:
+            # 计算所有像素的平均梯度
+            loss = gradient_magnitude.mean()
+        
+        return loss
+
+    def _color_constancy_loss(self, pred_color, tgt_color):
+        """
+        计算颜色一致性损失
+        
+        参数:
+            pred_color: 预测的颜色图，形状为 [H, W, 3]
+            tgt_color: 目标颜色图，形状为 [H, W, 3]
+            
+        返回:
+            constancy_loss: 颜色一致性损失
+        """
+        # 计算pred_color和tgt_color之间的平均颜色
+        pred_mean_color = pred_color.mean(dim=(0, 1))  # 形状: [3]
+        tgt_mean_color = tgt_color.mean(dim=(0, 1))  # 形状: [3]
+        # 计算平均颜色之间的L2距离
+        constancy_loss = F.mse_loss(pred_mean_color, tgt_mean_color)
+        return constancy_loss
+
     def test_loss_function(self, pred_intersects, tgt_intersect, tgt_maps, labels):
         """测试阶段的损失函数"""
         i_loss_fn = IntersectionLoss()
@@ -203,7 +286,7 @@ class VisSolver(Solver):
                    torch.full_like(tgt_color_map, fill_value=0))
         
         # 提取预测结果
-        pred_normal_map, pred_color_map = self._extract_hit_predictions(
+        pred_normal_map, pred_color_map, pred_hit_mask = self._extract_hit_predictions(
             pred_intersects, labels, create_fill_tensors
         )
         
@@ -235,7 +318,7 @@ class VisSolver(Solver):
                        torch.full_like(tgt_color_map, fill_value=0))
             
             # 提取预测结果
-            pred_normal_map, pred_color_map = self._extract_hit_predictions(
+            pred_normal_map, pred_color_map, pred_hit_mask = self._extract_hit_predictions(
                 intersect, labels, create_fill_tensors
             )
             
@@ -243,11 +326,15 @@ class VisSolver(Solver):
             ssim_norm = self._calculate_ssim_loss(pred_normal_map, tgt_normal_map)
             ssim_color = self._calculate_ssim_loss(pred_color_map, tgt_color_map)
             iloss = i_loss_fn(intersect, tgt_intersect)
+            smoothness_loss = self._color_smoothness_loss(pred_color_map, mask=pred_hit_mask)
+            constancy_loss = self._color_constancy_loss(pred_color_map, tgt_color_map)
             
             # 加权损失
             weighted_loss = (iloss + 
-                           ssim_norm * self.loss_weights['ssim_norm'] + 
-                           ssim_color * self.loss_weights['ssim_color']) * loss_weight
+                            ssim_norm * self.loss_weights['ssim_norm'] + 
+                            ssim_color * self.loss_weights['ssim_color'] + 
+                            smoothness_loss * self.loss_weights['smoothness'] + 
+                            constancy_loss * self.loss_weights['constancy']) * loss_weight
             total_loss += weighted_loss
             
         return total_loss, pred_normal_map, pred_color_map
@@ -527,6 +614,20 @@ class VisSolver(Solver):
             renderer.render(
                 save_images=True, save_video=False, output_dir=output_dir,
                 object_name=object_name, gt_img=[gt_img], frame_ids=[frame_id]
+            )
+
+            #save video
+            video_transform = Renderer.generate_views(120)
+            video_renderer = Renderer(
+                self.model.renderer_model, average_feat,
+                octree.compute_vertices(7)[1], octree, video_transform, depth=7
+            )
+
+            video_output_dir = os.path.join(self.FLAGS.SOLVER.logdir, 'rendering_videos')
+            os.makedirs(video_output_dir, exist_ok=True)
+            video_renderer.render(
+                save_images=False, save_video=True, output_dir=video_output_dir,
+                object_name=object_name, gt_img=None, frame_ids=None
             )
 
     @classmethod

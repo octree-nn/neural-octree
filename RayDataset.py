@@ -194,7 +194,7 @@ class Renderer:
 
         if save_video:
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            writer = cv2.VideoWriter(os.path.join(output_dir, f'{object_name}.mp4'), fourcc, fps, (self.W * 3, self.H))
+            writer = cv2.VideoWriter(os.path.join(output_dir, f'{object_name}.mp4'), fourcc, fps, (self.W * 4, self.H))
     
         if use_tqdm:
             iterator = tqdm(self.transform_matrices, desc='Rendering')

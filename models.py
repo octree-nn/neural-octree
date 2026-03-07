@@ -481,7 +481,8 @@ class NeuralIntersectionModel(nn.Module):
         super().__init__()
         self.in_channels = in_channels
         self.feature_model = UNet(in_channels=self.in_channels)
-        self.renderer_model = VoxelRendererModel(f_dim=16, n_iters=4)
+        # self.renderer_model = VoxelRendererModel(f_dim=16, n_iters=3)
+        self.renderer_model = SplitVoxelRendererModel(f_dim=16, n_iters=3)
 
     def forward(self, data: torch.Tensor, octree: Octree, depth: int, pin: torch.Tensor, direction: torch.Tensor, voxel_indices: torch.Tensor) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] | Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         vert_feat = self.feature_model(data, octree, depth)
@@ -557,6 +558,89 @@ class VoxelRendererModel(nn.Module):
             return position, normal, color, hit_prob
             # return position, normal, hit_prob
 
+
+class SplitVoxelRendererModel(nn.Module):
+    def __init__(self, f_dim=32, hidden_dim=128, out_dim=10, n_iters=4):
+        super().__init__()
+        self.n_iters = n_iters
+        
+        # 几何属性网络
+        geo_input_dim = f_dim + 3 + 3 + 3 + 1  # feature + direction + position + normal + hit_prob
+        self.geometry_embedding = nn.Linear(geo_input_dim, hidden_dim)
+        self.geometry_hidden2hidden = ResidualFCLayer3(hidden_dim)
+        self.geometry_output_layer = nn.Linear(hidden_dim, 7)  # 3(position) + 3(normal) + 1(hit_prob)
+        
+        # 材质属性网络
+        mat_input_dim = f_dim + 3 + 3 + 3  # feature + direction + position + color
+        self.material_embedding = nn.Linear(mat_input_dim, hidden_dim)
+        self.material_hidden2hidden = ResidualFCLayer3(hidden_dim)
+        self.material_output_layer = nn.Linear(hidden_dim, 3)  # 3(color)
+        
+        # 初始化参数
+        self.init_normal = nn.Parameter(torch.zeros((1, 3), dtype=torch.float), requires_grad=True)
+        self.init_color = nn.Parameter(torch.zeros((1, 3), dtype=torch.float), requires_grad=True)
+        self.init_hit_prob = nn.Parameter(torch.zeros((1,), dtype=torch.float), requires_grad=True)
+        
+        # 分别的隐藏状态
+        self.init_geo_hidden = nn.Parameter(torch.zeros((1, hidden_dim), dtype=torch.float), requires_grad=True)
+        self.init_mat_hidden = nn.Parameter(torch.zeros((1, hidden_dim), dtype=torch.float), requires_grad=True)
+    
+    def get_scene_feature_for_points(self, vert_feat: torch.Tensor, pos: torch.Tensor):
+        feat_interp = trilinear_interpolation(vert_feat, pos)  # (B, f_dim)
+        return feat_interp
+    
+    def forward(self, pin: torch.Tensor, direction: torch.Tensor, vert_feat: torch.Tensor):
+        B = pin.shape[0]
+        
+        # 初始化状态
+        position = pin
+        normal = self.init_normal.expand(B, -1)
+        color = self.init_color.expand(B, -1)
+        hit_prob = self.init_hit_prob.expand(B)
+        
+        # 分别的隐藏状态
+        geo_hidden = self.init_geo_hidden.expand(B, -1)
+        mat_hidden = self.init_mat_hidden.expand(B, -1)
+        
+        if self.training:
+            outputs: List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = []
+        
+        for i in range(self.n_iters):
+            # 获取场景特征
+            feature = self.get_scene_feature_for_points(vert_feat, position)
+            
+            # --- 几何属性预测 ---
+            geo_combined = torch.cat([feature, direction, position, normal, hit_prob.unsqueeze(-1)], dim=1)
+            geo_embedded = self.geometry_embedding(geo_combined)
+            geo_hidden = geo_hidden + self.geometry_hidden2hidden(geo_embedded)
+            geo_output = self.geometry_output_layer(geo_hidden)
+            
+            # 解析几何输出
+            position_raw = torch.sigmoid(geo_output[:, :3])
+            normal = F.normalize(geo_output[:, 3:6], dim=1)
+            hit_prob = F.sigmoid(geo_output[:, 6])
+            
+            # 确保位置在射线上
+            position = pin + direction * ((position_raw - pin) * direction).sum(dim=1, keepdim=True)
+            
+            # --- 材质属性预测 ---
+            mat_combined = torch.cat([feature, direction, position, color], dim=1)
+            mat_embedded = self.material_embedding(mat_combined)
+            mat_hidden = mat_hidden + self.material_hidden2hidden(mat_embedded)
+            mat_output = self.material_output_layer(mat_hidden)
+            
+            # 解析材质输出
+            color = torch.sigmoid(mat_output)
+            
+            if self.training:
+                outputs.append((position, normal, color, hit_prob))
+        
+        if self.training:
+            return outputs
+        else:
+            return position, normal, color, hit_prob
+
+
 class LocalPositionEncoder:
     def __init__(self, depth: int):
         ...
@@ -607,3 +691,5 @@ class PNHLoss(nn.Module):
         hit_loss = F.binary_cross_entropy(pred_hit, mask)
         
         return 2*pos_loss + norm_loss + 2*hit_loss
+
+
