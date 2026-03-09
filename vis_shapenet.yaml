@@ -2,14 +2,14 @@ SOLVER:
   # gpu: 1, 2, 7
   # gpu: 0, 3, 4, 5
   # gpu: 3, 
-  # gpu: 0, 
-  gpu: 4, 5, 6, 7
+  gpu: 0, 
+  # gpu: 4, 5, 6, 7
   # gpu: 0, 1, 2, 3
   # gpu: 4,
   # run: best_view
-  run: train
+  # run: train
   # run: test
-  # run: render
+  run: render
   type: adamw
   # empty_cache: false
 
@@ -32,6 +32,7 @@ SOLVER:
   weight_decay: 0.00000
   save_pred: False
   pin_memory: false
+  save_video: False
 
 DATA:
   train:

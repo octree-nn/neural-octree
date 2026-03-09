@@ -4,15 +4,9 @@ from torch.nn import functional as F
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 
-# from modules import NeuralIntersectionModel5 as NeuralIntersectionModel
-# from models import IdenticalLocalPositionEncoder as LocalPositionEncoder
-# from models import ZeroMeanLocalPositionEncoder as LocalPositionEncoder
-# from models import SymmetricLocalPositionEncoder as LocalPositionEncoder
 from models import LocalPositionEncoder as LocalPositionEncoder
 from utils_train import generate_rays, grouped_interleave_indices, read_image, read_transforms, create_point_cloud
-# from sparse_voxels import SparseVoxels, create_sparse_voxels_from_points
 from models import VoxelRendererModel as NeuralRendererModel
-from Arguments import config_name, object_name, use_tqdm, depth
 from octree import Octree
 
 import os
@@ -23,140 +17,6 @@ from tqdm import tqdm
 from time import time
 from typing import List, Tuple, Dict
 
-local_position_encode = LocalPositionEncoder(depth)
-
-class TrainingRayDataset(Dataset):
-    def __init__(self, data_path : str, depth = 5, device = 'cuda', cache_first: bool = True):
-
-        scale = 1 << depth
-        half_scale = scale >> 1
-
-        frames, camera_matrix = read_transforms(os.path.join(data_path, 'transforms.json'), device)
-
-        self.pin: List[Tensor] = []
-        self.pout: List[Tensor] = []
-        self.indices: List[Tensor] = []
-        self.hit: List[Tensor] = []
-        self.pos: List[Tensor] = []
-        self.norm: List[Tensor] = []
-        self.labels: List[Tensor] = []
-        self.grid_bases: List[Tensor] = []
-
-        cache_dir = f'./cache_grid/depth{depth}/{object_name}'
-        os.makedirs(cache_dir, exist_ok=True)
-
-        cache_sparse_voxels = os.path.join(cache_dir, 'sparse_voxels.pth')
-        if os.path.isfile(cache_sparse_voxels) and cache_first:
-            sparse_voxels_data = torch.load(cache_sparse_voxels, weights_only=False)
-            self.sparse_voxels = SparseVoxels(
-                sparse_voxels_data.to(device), 
-                depth, 
-                device
-            )
-        else:
-            sparse_voxels_coords = get_sparse_voxels(data_path, depth, device)
-            self.sparse_voxels = SparseVoxels(sparse_voxels_coords, depth, device)
-            torch.save(sparse_voxels_coords.cpu(), cache_sparse_voxels)
-        
-        print(f'voxel counts: {self.sparse_voxels.num_voxels}')
-        print(f'vert counts: {self.sparse_voxels.num_vertices}', flush=True)
-
-        cache_transform_matrices = os.path.join(cache_dir, 'transform_matrices.pth')
-        if os.path.isfile(cache_transform_matrices) and cache_first:
-            self.transform_matrices: torch.Tensor = torch.load(cache_transform_matrices, weights_only=False)
-            transform_matrices_loaded = True
-        else:
-            transform_matrices_loaded = False
-            self.transform_matrices: List[torch.Tensor] = []
-
-
-        if use_tqdm:
-            iterator = tqdm(frames, desc='Loading frames')
-        else:
-            iterator = frames
-            start_time = time()
-
-        for i, frame in enumerate(iterator):
-            cache_file = os.path.join(cache_dir, f'{i}.pth')
-
-            file_path = frame['file_path'].split('.')[0]
-            depth_min, depth_max = frame['depth']['min'], frame['depth']['max']
-
-            if os.path.isfile(cache_file) and cache_first:
-                pins, pouts, indices, hits, positions, normals, labels, grid_bases = torch.load(cache_file, weights_only=False)
-                if not transform_matrices_loaded:
-                    transform_matrix = torch.tensor(frame['transform_matrix'], dtype=torch.float, device=device)
-                    self.transform_matrices.append(transform_matrix)
-
-            else:
-                if transform_matrices_loaded:
-                    transform_matrix = self.transform_matrices[i]
-                else:
-                    transform_matrix = torch.tensor(frame['transform_matrix'], dtype=torch.float, device=device)
-                    self.transform_matrices.append(transform_matrix)
-                
-                normal_image = read_image(os.path.join(data_path, f'{file_path}_normal.png'))[:,:,:3].to(device)
-                depth_image = read_image(os.path.join(data_path, f'{file_path}_depth.png')).to(device)
-                valid = (depth_image != 65535).reshape(-1)
-                depth_image = depth_image.float() * (depth_max - depth_min) / 65535.0 + depth_min
-
-                origins, dirs, points, normals = create_point_cloud(depth_image, normal_image, camera_matrix, transform_matrix)
-
-                points = points * scale + half_scale
-                origins = origins * scale + half_scale
-                hits = valid.float()
-
-                intersections = torch.cat([hits.unsqueeze(-1), points, normals], dim=-1)
-                pins, pouts, indices, hits, positions, normals, labels, grid_bases = query_valid_ray_voxel_pair(origins, dirs, self.sparse_voxels, intersections, scale, depth)
-                pins, pouts, indices, hits, positions, normals, labels, grid_bases = pins.cpu(), pouts.cpu(), indices.cpu(), hits.float().cpu(), positions.cpu(), normals.cpu(), labels.cpu(), grid_bases.cpu()
-
-                torch.save((pins, pouts, indices, hits, positions, normals, labels, grid_bases), cache_file)
-
-            self.pin.append(pins)
-            self.pout.append(pouts)
-            self.indices.append(indices)
-            self.hit.append(hits)
-            self.pos.append(positions)
-            self.norm.append(F.normalize(normals, dim=-1))
-            self.labels.append(labels)
-            self.grid_bases.append(grid_bases)
-
-        if use_tqdm:
-            iterator.close()
-        else:
-            end_time = time()
-            delta_time = end_time - start_time
-            print(f'Finish loading {len(iterator)} frames in {delta_time:.2f}s, fps = {len(iterator) / delta_time:.2f}', flush=True)
-
-        if not transform_matrices_loaded:
-            self.transform_matrices = torch.stack(self.transform_matrices, dim=0).cpu()
-            torch.save(self.transform_matrices, cache_transform_matrices)
-        self.sparse_voxels = self.sparse_voxels.cpu()
-        self.length = len(self.pin)
-        print(self.length)
-
-        print(f'num training items: {sum([len(item) for item in self.pin])} | Hit counts: {sum([torch.count_nonzero(item).item() for item in self.hit])}', flush=True)
-
-        torch.cuda.empty_cache()
-        gc.collect()
-        torch.cuda.empty_cache()
-        gc.collect()
-
-    def __len__(self):
-        return self.length
-
-    def __getitem__(self, idx: int):
-        '''
-        一次加载一个视角
-        '''
-        return self.pin[idx], self.pout[idx], self.indices[idx], self.hit[idx], self.pos[idx], self.norm[idx], self.labels[idx], self.grid_bases[idx]
-    
-    @staticmethod
-    def remapping_image(labels: torch.Tensor, colors: torch.Tensor, H = 512, W = 512, fill: float = 0):
-        C = colors.shape[-1]
-        image = torch.full((H * W, C), fill, dtype=colors.dtype, device=colors.device)
-        image[labels] = colors
-        return image.view(H, W, C)
 
 
 class Renderer:
@@ -181,11 +41,12 @@ class Renderer:
 
         self.device = device
         self.max_batch_size = max_batch_size
+        self.local_position_encode = LocalPositionEncoder(depth)
 
     def render_new_frame(self, transform_matrix: torch.Tensor):
         return Renderer.render_frame(transform_matrix, self.camera_matrix, self.sparse_voxels, self.model, self.v_feats, self.v_idxs, self.depth, self.scale, self.W, self.H, self.max_batch_size, self.device)
 
-    def render(self, save_images = True, save_video = False, output_dir = f'./rendered_views/{config_name}', object_name=f'{object_name}', gt_img=None, fps=60, frame_ids=None):
+    def render(self, save_images = True, save_video = False, output_dir='', object_name='', gt_img=None, fps=60, frame_ids=None):
         if save_images:
             object_dir = os.path.join(output_dir, object_name)
             os.makedirs(object_dir, exist_ok=True)
@@ -196,11 +57,9 @@ class Renderer:
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             writer = cv2.VideoWriter(os.path.join(output_dir, f'{object_name}.mp4'), fourcc, fps, (self.W * 4, self.H))
     
-        if use_tqdm:
-            iterator = tqdm(self.transform_matrices, desc='Rendering')
-        else:
-            iterator = self.transform_matrices
-            start_time = time()
+
+        iterator = self.transform_matrices
+        start_time = time()
 
         for i, transform_matrix in enumerate(iterator):
             image = self.render_new_frame(transform_matrix)
@@ -215,12 +74,10 @@ class Renderer:
             if save_video:
                 writer.write(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
 
-        if use_tqdm:
-            iterator.close()
-        else:
-            end_time = time()
-            delta_time = end_time - start_time
-            # print(f'Finish rendering {len(iterator)} frames in {delta_time:.2f}s, fps = {len(iterator) / delta_time:.2f}', flush=True)
+
+        end_time = time()
+        delta_time = end_time - start_time
+        # print(f'Finish rendering {len(iterator)} frames in {delta_time:.2f}s, fps = {len(iterator) / delta_time:.2f}', flush=True)
 
         if save_video:
             writer.release()
@@ -285,7 +142,7 @@ class Renderer:
                     # pos, norm, hit = model(pin, F.normalize(pout - pin, dim=1), query_v_feats)
                     hit_mask = hit > 0.5
                     if hit_mask.any():
-                        pos = local_position_encode.decode(pos[hit_mask], cxyz[hit_mask]) # pos[hit_mask] + cxyz[hit_mask]
+                        pos = self.local_position_encode.decode(pos[hit_mask], cxyz[hit_mask]) # pos[hit_mask] + cxyz[hit_mask]
                         norm = norm[hit_mask]
                         color = color[hit_mask]
                         labels = labels[hit_mask]
@@ -319,7 +176,7 @@ class Renderer:
                 # pos_mask = pos[hit_mask]
                 # print(f'pos_mask min: {pos_mask.min(dim=0).values}, max: {pos_mask.max(dim=0).values}')
                 if hit_mask.any():
-                    pos = local_position_encode.decode(pos[hit_mask], chosen_cxyz[hit_mask]) # pos[hit_mask] + chosen_cxyz[hit_mask]
+                    pos = self.local_position_encode.decode(pos[hit_mask], chosen_cxyz[hit_mask]) # pos[hit_mask] + chosen_cxyz[hit_mask]
                     # print(f'pos min: {pos.min(dim=0).values}, max: {pos.max(dim=0).values}')
                     norm = norm[hit_mask]
                     color = color[hit_mask]

@@ -8,7 +8,6 @@ from ocnn.nn import OctreeConv, OctreeDeconv
 from typing import Dict, List, Tuple
 import torch.nn as nn
 import torch.nn.functional as F
-# from octformerseg import OctFormerSeg
 
 
 def trilinear_interpolation(F: torch.Tensor, P: torch.Tensor) -> torch.Tensor:
@@ -393,61 +392,6 @@ class UNet(torch.nn.Module):
         # return convd[depth - self.encoder_stages]
         return deconv
 
-
-class VisNet(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int):
-        super(VisNet, self).__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.mlp = torch.nn.Sequential(
-        Conv1x1BnRelu(self.in_channels, 128),
-        #ocnn.modules.Conv1x1BnRelu(128, 128),
-        Conv1x1BnRelu(128, 64),
-        #ocnn.modules.Conv1x1BnRelu(64, 64),
-        ocnn.modules.Conv1x1(64, self.out_channels, use_bias=True)
-        )
-    def forward(self, feature):
-        output = self.mlp(feature)
-        return output
-
-
-class FiLM(nn.Module):
-    def __init__(self, input_dim, condition_dim):
-        super(FiLM, self).__init__()
-        
-        # 全连接层，用于生成γ和β参数
-        self.fc_gamma = nn.Linear(condition_dim, input_dim)
-        self.fc_beta = nn.Linear(condition_dim, input_dim)
-        
-    def forward(self, x, condition):
-        # 根据条件特征获取缩放scale参数和移位参数shift，即计算γ和β参数
-        gamma = self.fc_gamma(condition)
-        beta = self.fc_beta(condition)
-        
-        # 对输入特征x进行缩放和偏移，实现条件特征调整输入特征
-        y = gamma * x + beta 
-
-class MyNet(nn.Module):
-    def __init__(self, in_channels: int, vp_channels: int, out_channels: int):
-        super(MyNet, self).__init__()
-        self.in_channels = in_channels
-        self.vp_channels = vp_channels
-        self.out_channels = out_channels
-        self.UNet = UNet(in_channels=self.in_channels)
-        # self.UNet = OctFormerSeg(in_channels=self.in_channels, out_channels=63)
-        # self.film = FiLM(63, vp_channels)
-        self.VisNet = VisNet(vp_channels, out_channels)
-
-    def forward(self, data: torch.Tensor, octree: Octree, depth: int, query_pts: torch.Tensor, viewdirs: torch.Tensor):
-        feature = self.UNet(data, octree, depth, query_pts)
-        # feature = torch.cat([feature, viewdirs], dim=1)
-        num_v = viewdirs.shape[0] // feature.shape[0]
-        feature = feature.unsqueeze(1).repeat(1, num_v, 1).reshape(-1, 63)
-        feature = feature * viewdirs
-        # feature = torch.cat([feature, viewdirs], dim=1)
-        output = self.VisNet(feature)
-        return output.view(-1,2)
-
     
 class ResidualFCLayer3(nn.Module):
     def __init__(self, dim: int):
@@ -485,32 +429,95 @@ class NeuralIntersectionModel(nn.Module):
         self.renderer_model = SplitVoxelRendererModel(f_dim=16, n_iters=3)
 
     def forward(self, data: torch.Tensor, octree: Octree, depth: int, pin: torch.Tensor, direction: torch.Tensor, voxel_indices: torch.Tensor) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] | Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # 1. 特征提取
         vert_feat = self.feature_model(data, octree, depth)
-        query_d = 7
-        n_vertices, vert_indexes = octree.compute_vertices(query_d)
-        assert vert_feat.shape[0] == vert_indexes.shape[0]
-        all_vertieces = torch.zeros((n_vertices * 8, vert_feat.shape[1] // 8 + 1), dtype=vert_feat.dtype, device=vert_feat.device)
-        vert_indexes_expanded = vert_indexes * 8 + torch.arange(8, device=vert_indexes.device).unsqueeze(0)
-        vert_feat_with_i = torch.cat([vert_feat.view(vert_indexes.shape[0] * 8, -1), torch.ones((vert_indexes.shape[0] * 8, 1), device=vert_feat.device)], dim=1)
-        all_vertieces[vert_indexes_expanded.view(-1)] = vert_feat_with_i.view(vert_indexes.shape[0] * 8, -1)
-        average_feat = all_vertieces.view(-1,8, vert_feat.shape[1] // 8 + 1)[:, :, :-1].sum(dim=1) / all_vertieces.view(-1,8, vert_feat.shape[1] // 8 + 1)[:, :, -1:].sum(dim=1)
-        assert average_feat.shape[0] == n_vertices
-        queryed_vert_indexes = vert_indexes[voxel_indices].view(-1,2,2,2)
-        vert_feat = average_feat[queryed_vert_indexes]
-        # vert_feat = self.feature_model(voxel_indices)
+        
+        # 2. 构建顶点特征图
+        average_feat, vert_indexes = self._build_vertex_feature_map(vert_feat, octree)
+        
+        # 3. 查询目标体素顶点特征
+        vert_feat = self._query_voxel_vertices(
+            average_feat, vert_indexes, octree, voxel_indices
+        )
+        
+        # 4. 渲染交点
         intersection = self.renderer_model(pin, direction, vert_feat)
         return intersection
+    
+    def _build_vertex_feature_map(
+        self,
+        vert_feat: torch.Tensor,
+        octree: Octree
+    ) -> torch.Tensor:
+        """
+        构建顶点特征图
+        1. 计算顶点索引
+        2. 扩展特征维度
+        3. 计算平均特征
+        """
+        query_d = 7
+        
+        # 计算顶点
+        n_vertices, vert_indexes = octree.compute_vertices(query_d)
+        assert vert_feat.shape[0] == vert_indexes.shape[0]
+        
+        # 准备特征存储空间
+        feat_channels = vert_feat.shape[1] // 8
+        device = vert_feat.device
+        dtype = vert_feat.dtype
+        
+        all_vertices = torch.zeros(
+            (n_vertices * 8, feat_channels + 1),
+            dtype=dtype,
+            device=device
+        )
+        
+        # 扩展特征（添加权重通道）
+        vert_indexes_expanded = vert_indexes * 8 + torch.arange(
+            8, device=device
+        ).unsqueeze(0)
+        
+        vert_feat_reshaped = vert_feat.view(vert_indexes.shape[0] * 8, -1)
+        weights = torch.ones(
+            (vert_indexes.shape[0] * 8, 1), device=device
+        )
+        vert_feat_with_weight = torch.cat([vert_feat_reshaped, weights], dim=1)
+        
+        # 填充特征
+        all_vertices[vert_indexes_expanded.view(-1)] = vert_feat_with_weight
+        
+        # 计算加权平均特征
+        reshaped_features = all_vertices.view(-1, 8, feat_channels + 1)
+        feature_sum = reshaped_features[:, :, :-1].sum(dim=1)
+        weight_sum = reshaped_features[:, :, -1:].sum(dim=1)
+        average_feat = feature_sum / weight_sum
+        
+        assert average_feat.shape[0] == n_vertices
+        return average_feat, vert_indexes
+
+    def _query_voxel_vertices(
+        self,
+        average_feat: torch.Tensor,
+        vert_indexes: torch.Tensor,
+        octree: Octree,
+        voxel_indices: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        查询指定体素的顶点特征
+        """        
+        # 获取目标体素的顶点索引
+        query_vert_indexes = vert_indexes[voxel_indices].view(-1, 2, 2, 2)
+        
+        # 查询顶点特征
+        vert_feat = average_feat[query_vert_indexes]
+        return vert_feat
+        
 
 class VoxelRendererModel(nn.Module):
     def __init__(self, f_dim = 32, hidden_dim = 128, out_dim = 10, n_iters=4):
         super().__init__()
         self.n_iters = n_iters
         self.embedding = nn.Linear(f_dim + out_dim + 3, hidden_dim)
-        # self.hidden2hidden = nn.Sequential(
-        #     ResidualFCLayer2(hidden_dim),
-        #     ResidualFCLayer2(hidden_dim),
-        # )
-        # self.hidden2hidden = ResidualFCLayer2(hidden_dim)
         self.hidden2hidden = ResidualFCLayer3(hidden_dim)
         self.output_layer = nn.Linear(hidden_dim, out_dim)
 

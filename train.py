@@ -5,22 +5,24 @@ import ocnn
 from tqdm import tqdm
 from thsolver import Solver
 import numpy as np
-from octree import Octree
-from octree import merge_octrees
-
-from datascts import get_shapenet_dataset, generate_camera_matrices
+from octree import Octree, merge_octrees
+from datascts import get_shapenet_dataset
 from models import NeuralIntersectionModel, get_embedder, LocalPositionEncoder
-# from models import PNHLoss as IntersectionLoss 
 from models import PNCHLoss as IntersectionLoss
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 from thsolver.tracker import AverageTracker
-from thsolver.sampler import InfSampler, DistributedInfSampler
-import math
-
 from datetime import timedelta
-
 from RayDataset import Renderer
 from utils_train import read_transforms
+import math
+
+# 常量定义
+_DEFAULT_H = 512
+_DEFAULT_W = 512
+_RAY_MASK_INITIAL_VALUE = 1
+_SSIM_DATA_RANGE = 1.0
+_GAUSSIAN_SIGMA = 1
+_GAUSSIAN_STEEPNESS = 6
 
 
 class VisSolver(Solver):
@@ -28,355 +30,451 @@ class VisSolver(Solver):
         super().__init__(flags, is_master)
         self.embedder, vd_ch = get_embedder(flags.MODEL.multires)
         self.local_position_encoder = LocalPositionEncoder(depth=5)
-        self.ssim_loss = StructuralSimilarityIndexMeasure(data_range=1.0).cuda()
-    
+        self.ssim_loss = StructuralSimilarityIndexMeasure(data_range=_SSIM_DATA_RANGE).cuda()
+        self._setup_constants()
+
+    def _setup_constants(self):
+        """初始化训练相关常量"""
+        self.loss_weights = {
+            'ssim_norm': 0.3,
+            'ssim_color': 1.0,
+            'test_ssim_norm': 0.3,
+            'test_ssim_color': 1.0, 
+            'smoothness': 0.2, 
+            'constancy': 0.1
+        }
+
     def get_model(self, flags):
-        model = NeuralIntersectionModel(flags.channel)
-        return model
-    
+        return NeuralIntersectionModel(flags.channel)
+
     def get_dataset(self, flags):
         return get_shapenet_dataset(flags)
-    
+
     def get_input_feature(self, octree, flags):
+        """提取八叉树特征"""
         depth = octree.depth
-        f = flags.feature
-        f = f.upper()
+        feature_config = flags.feature.upper()
         features = []
-        if 'N' in f:
+
+        self._add_normal_feature(features, octree, depth, feature_config)
+        self._add_feature_data(features, octree, depth, feature_config)
+        self._add_local_features(features, octree, depth, feature_config)
+        self._add_global_points(features, octree, depth, feature_config)
+
+        return torch.cat(features, dim=1) if features else torch.empty(0)
+
+    def _add_normal_feature(self, features, octree, depth, feature_config):
+        """添加法线特征"""
+        if 'N' in feature_config:
             features.append(octree.normals[depth])
-        if 'F' in f:
+
+    def _add_feature_data(self, features, octree, depth, feature_config):
+        """添加特征数据"""
+        if 'F' in feature_config:
             features.append(octree.features[depth])
-        if 'L' in f or 'D' in f:
+
+    def _add_local_features(self, features, octree, depth, feature_config):
+        """添加局部特征（局部点坐标和距离）"""
+        if 'L' in feature_config or 'D' in feature_config:
             local_points = octree.points[depth].frac() - 0.5
-        if 'L' in f:
+            
+        if 'L' in feature_config:
             features.append(local_points)
-        if 'D' in f:
-            dis = torch.sum(local_points * octree.normals[depth], dim=1, keepdim=True)
-            features.append(dis)
-        if 'P' in f:
-            scale = 2 ** (1 - depth)   # normalize [0, 2^depth] -> [-1, 1]
+            
+        if 'D' in feature_config:
+            distance = torch.sum(local_points * octree.normals[depth], dim=1, keepdim=True)
+            features.append(distance)
+
+    def _add_global_points(self, features, octree, depth, feature_config):
+        """添加全局坐标特征"""
+        if 'P' in feature_config:
+            scale = 2 ** (1 - depth)  # 归一化 [0, 2^depth] -> [-1, 1]
             global_points = octree.points[depth] * scale - 1.0
             features.append(global_points)
-        out = torch.cat(features, dim=1)
-        return out
+
+    def _build_single_octree(self, points, flags):
+        """构建单个八叉树"""
+        octree = Octree(flags.depth, flags.full_depth)
+        octree.build_octree(points)
+        return octree
 
     def process_batch_multi(self, batch, flags):
-        def points2octree(points):
-            octree = Octree(flags.depth, flags.full_depth)
-            octree.build_octree(points)
-            return octree
-
+        """处理多个样本的批次数据"""
         points = [pts.cuda(non_blocking=True) for pts in batch['points']]
-        octrees = [points2octree(pts) for pts in points]
+        octrees = [self._build_single_octree(pts, flags) for pts in points]
         octree = merge_octrees(octrees)
         octree.construct_all_neigh()
+        
         batch['points'] = ocnn.octree.merge_points(points)
         batch['octree'] = octree
-        pins = [pin.cuda(non_blocking=True) for pin in batch['pins']]
-        batch['pins'] = torch.cat(pins, dim=0)
-        pouts = [pout.cuda(non_blocking=True) for pout in batch['pouts']]
-        batch['pouts'] = torch.cat(pouts, dim=0)
-        indices = [idx.cuda(non_blocking=True) for idx in batch['indices']]
-        batch['indices'] = torch.cat(indices, dim=0)
-        hits = [hit.cuda(non_blocking=True) for hit in batch['hits']]
-        batch['hits'] = torch.cat(hits, dim=0)
-        positions = [pos.cuda(non_blocking=True) for pos in batch['positions']]
-        batch['positions'] = torch.cat(positions, dim=0)
-        normals = [normal.cuda(non_blocking=True) for normal in batch['normals']]
-        batch['normals'] = torch.cat(normals, dim=0)
-        colors = [color.cuda(non_blocking=True) for color in batch['colors']]
-        batch['colors'] = torch.cat(colors, dim=0)
-        labels = [label.cuda(non_blocking=True) for label in batch['labels']]
-        batch['labels'] = torch.cat(labels, dim=0)
-        # viewdirs = [vd.cuda() for vd in batch['viewdirs']]
-        # batch['viewdirs'] = torch.cat(viewdirs, dim=0)
-        # labels = [label.cuda() for label in batch['labels']]
-        # batch['labels'] = torch.cat(labels, dim=0).reshape(-1,1)
+        
+        # 批量处理张量并转移到GPU
+        tensor_keys = ['pins', 'pouts', 'indices', 'hits', 'positions', 
+                      'normals', 'colors', 'labels']
+        for key in tensor_keys:
+            if key in batch:
+                tensors = [t.cuda(non_blocking=True) for t in batch[key]]
+                batch[key] = torch.cat(tensors, dim=0)
+                
         return batch
-    
+
     def process_batch(self, batch, flags):
-        # def points2octree(points):
-        #     octree = Octree(flags.depth, flags.full_depth, device=points.device)
-        #     octree.build_octree(points)
-        #     return octree
+        return batch  # 单样本处理保持原样
 
-        # points = batch['points'].cuda(non_blocking=True)
-        # octree = points2octree(points)
-        # # octree = merge_octrees(octrees)
-        # octree.construct_all_neigh()
-        # batch['points'] = points
-        # batch['octree'] = octree
-        # # pins = [pin.cuda(non_blocking=True) for pin in batch['pins']]
-        # batch['pins'] = batch['pins'].cuda(non_blocking=True)
-        # # batch['pins'] = torch.cat(pins, dim=0)
-        # # pouts = [pout.cuda(non_blocking=True) for pout in batch['pouts']]
-        # # batch['pouts'] = torch.cat(pouts, dim=0)
-        # batch['pouts'] = batch['pouts'].cuda(non_blocking=True)
-        # # indices = [idx.cuda(non_blocking=True) for idx in batch['indices']]
-        # # batch['indices'] = torch.cat(indices, dim=0)
-        # # hits = [hit.cuda(non_blocking=True) for hit in batch['hits']]
-        # # batch['hits'] = torch.cat(hits, dim=0)
-        # batch['indices'] = batch['indices'].cuda(non_blocking=True)
-        # batch['hits'] = batch['hits'].cuda(non_blocking=True)
-        # # positions = [pos.cuda(non_blocking=True) for pos in batch['positions']]
-        # # batch['positions'] = torch.cat(positions, dim=0)
-        # # normals = [normal.cuda(non_blocking=True) for normal in batch['normals']]
-        # # batch['normals'] = torch.cat(normals, dim=0)
-        # # colors = [color.cuda(non_blocking=True) for color in batch['colors']]
-        # # batch['colors'] = torch.cat(colors, dim=0)
-        # # labels = [label.cuda(non_blocking=True) for label in batch['labels']]
-        # # batch['labels'] = torch.cat(labels, dim=0)
-        # batch['positions'] = batch['positions'].cuda(non_blocking=True)
-        # batch['normals'] = batch['normals'].cuda(non_blocking=True)
-        # batch['colors'] = batch['colors'].cuda(non_blocking=True)
-        # batch['labels'] = batch['labels'].cuda(non_blocking=True)
-        # viewdirs = [vd.cuda() for vd in batch['viewdirs']]
-        # batch['viewdirs'] = torch.cat(viewdirs, dim=0)
-        # labels = [label.cuda() for label in batch['labels']]
-        # batch['labels'] = torch.cat(labels, dim=0).reshape(-1,1)
-        # batch['octree'].construct_all_neigh()
-        return batch
-
-
-    def remapping_image(self, labels: torch.Tensor, colors: torch.Tensor, H = 512, W = 512, fill: float = 0):
+    def remapping_image(self, labels, colors, H=_DEFAULT_H, W=_DEFAULT_W, fill=0.0):
+        """将标签和颜色重新映射为图像"""
         C = colors.shape[-1]
-        # image = torch.full((H * W, C), fill, dtype=colors.dtype, device=colors.device)
-        # print((H * W, C))
-        assert colors.device != torch.device('cpu')
+        assert colors.device != torch.device('cpu'), "Colors should be on GPU"
+        
         image = torch.zeros((H * W, C), device=colors.device, dtype=colors.dtype)
-
         image[labels] = colors
         return image.view(H, W, C)
 
-    def model_forward(self, batch):
-        octree, points, pins, pouts, indices, hits, positions, normals, colors, labels = \
-            batch['octree'], batch['points'], batch['pins'], batch['pouts'], batch['indices'], \
-            batch['hits'], batch['positions'], batch['normals'], batch['colors'], batch['labels']
-        input_feature = self.get_input_feature(batch['octree'], self.FLAGS.MODEL)
-        # query_pts = torch.cat([points.points, points.batch_id], dim=1)
-        # viewdirs = self.embedder(viewdirs.view(-1, 3))
+    def _prepare_ray_data(self, batch):
+        """准备光线数据用于前向传播"""
+        data_keys = ['octree', 'points', 'pins', 'pouts', 'indices', 
+                    'hits', 'positions', 'normals', 'colors', 'labels']
+        return (batch[key] for key in data_keys)
+
+    def _prepare_target_maps(self, normals, colors, labels):
+        """准备目标图像映射"""
         tgt_normal_map = self.remapping_image(labels, normals, fill=0)
         tgt_color_map = self.remapping_image(labels, colors, fill=0)
+        return tgt_normal_map, tgt_color_map
+
+    def model_forward(self, batch):
+        """模型前向传播"""
+        octree, points, pins, pouts, indices, hits, positions, normals, colors, labels = \
+            self._prepare_ray_data(batch)
+            
+        input_feature = self.get_input_feature(octree, self.FLAGS.MODEL)
+        tgt_normal_map, tgt_color_map = self._prepare_target_maps(normals, colors, labels)
         tgt_local_pos = self.local_position_encoder.encode(positions)
         directions = F.normalize(pouts - pins, dim=-1)
         
         pred_intersects = self.model(input_feature, octree, octree.depth, pins, directions, indices)
         tgt_intersects = (tgt_local_pos, normals, colors, hits)
-        # tgt_intersects = (tgt_local_pos, normals, hits)
         tgt_maps = (tgt_normal_map, tgt_color_map)
+        
         return pred_intersects, tgt_intersects, tgt_maps, labels
-        # return pred_intersects, tgt_intersects, tgt_normal_map, labels
-    
-    def train_step(self, batch, epoch):
-        batch = self.process_batch(batch, self.FLAGS.DATA.train)
-        pred_intersects, tgt_intersects, tgt_maps, labels = self.model_forward(batch)
-        loss, pred_norm_map, pred_color_map = self.loss_function(pred_intersects, tgt_intersects, tgt_maps, labels, epoch)
-        # loss, pred_norm_map = self.loss_function(pred_intersects, tgt_intersects, tgt_maps, labels, epoch)
-        # loss = self.loss_function(pred_intersects, tgt_intersects, tgt_maps, labels, epoch)
-        psnr_color, psnr_norm = self.accuracy((pred_norm_map, pred_color_map), tgt_maps)
-        # psnr_norm = self.accuracy(pred_norm_map, tgt_maps)
-        return {'train/loss': loss, 'train/psnr_c': psnr_color, 'train/psnr_n': psnr_norm}
-        # return {'train/loss': loss, 'train/psnr_n': psnr_norm}
-        # return {'train/loss': loss}
-    
-    def test_step(self, batch, iteration):   
-        batch = self.process_batch(batch, self.FLAGS.DATA.test)
-        with torch.no_grad():
-            pred_intersects, tgt_intersects, tgt_maps, labels = self.model_forward(batch)
-        loss, pred_norm_map, pred_color_map = self.test_loss_function(pred_intersects, tgt_intersects, tgt_maps, labels)
-        # loss, pred_norm_map = self.test_loss_function(pred_intersects, tgt_intersects, tgt_maps, labels)
-        psnr_color, psnr_norm = self.accuracy((pred_norm_map, pred_color_map), tgt_maps)
-        # psnr_norm = self.accuracy(pred_norm_map, tgt_maps)
-        # save pred_norm_map and pred_color_map as images if needed
-        # if self.FLAGS.SOLVER.save_pred and self.is_master:
-        #     save_dir = os.path.join(self.FLAGS.SOLVER.logdir, 'gt_images')
-        #     os.makedirs(save_dir, exist_ok=True)
-        #     iter_num = iteration
-        #     norm_image = (pred_norm_map + 1.0) / 2.0 * 255
-        #     norm_image = norm_image.cpu().numpy().astype(np.uint8)
-        #     color_image = (pred_color_map.cpu().numpy() * 255).astype(np.uint8)
-        #     from PIL import Image
-        #     norm_pil = Image.fromarray(norm_image)
-        #     color_pil = Image.fromarray(color_image)
-        #     norm_pil.save(os.path.join(save_dir, 'norm_%06d.png' % iter_num))
-        #     color_pil.save(os.path.join(save_dir, 'color_%06d.png' % iter_num))
-        return {'test/loss': loss, 'test/psnr_c': psnr_color, 'test/psnr_n': psnr_norm}
-        # return {'test/loss': loss, 'test/psnr_n': psnr_norm}
-    
-    def eval_step(self, batch):
-        pass
+
+    def _extract_hit_predictions(self, pred_data, labels, fill_tensor_fn):
+        """从预测数据中提取命中点的预测结果"""
+        pred_pos, pred_norm, pred_color, pred_hit = pred_data
+        pred_hit_mask = pred_hit > 0.5
+        
+        if not pred_hit_mask.any():
+            return fill_tensor_fn()
+            
+        pred_hit_norm = pred_norm[pred_hit_mask]
+        pred_hit_color = pred_color[pred_hit_mask]
+        pred_hit_rays = labels[pred_hit_mask]
+        
+        # 为每个光线保留第一个命中点
+        unique_ray_mask = self._get_unique_ray_mask(pred_hit_rays)
+        unique_pred_hit_norm = pred_hit_norm[unique_ray_mask]
+        unique_pred_hit_color = pred_hit_color[unique_ray_mask]
+        unique_pred_hit_rays = pred_hit_rays[unique_ray_mask]
+        
+        pred_normal_map = self.remapping_image(unique_pred_hit_rays, unique_pred_hit_norm, fill=0)
+        pred_color_map = self.remapping_image(unique_pred_hit_rays, unique_pred_hit_color, fill=0)
+        
+        image_mask = torch.zeros((pred_normal_map.shape[0] * pred_normal_map.shape[1]), dtype=torch.bool, device=pred_normal_map.device)
+        image_mask[unique_pred_hit_rays] = True
+        
+        return pred_normal_map, pred_color_map, image_mask.view(pred_normal_map.shape[0], pred_normal_map.shape[1])
+
+    def _get_unique_ray_mask(self, rays):
+        """获取每个光线的唯一命中点掩码"""
+        return torch.cat([
+            torch.tensor([_RAY_MASK_INITIAL_VALUE], dtype=torch.bool, device=rays.device),
+            rays[1:] != rays[:-1]
+        ], dim=0)
+
+    def _calculate_ssim_loss(self, pred_map, tgt_map):
+        """计算SSIM损失"""
+        pred_permuted = pred_map.permute(2, 0, 1).unsqueeze(0)
+        tgt_permuted = tgt_map.permute(2, 0, 1).unsqueeze(0)
+        return 1.0 - self.ssim_loss(pred_permuted, tgt_permuted)
+
+    def _color_smoothness_loss(self, color_map, mask=None):
+        """
+        计算颜色平滑度损失
+        
+        参数:
+            color_map: 预测的颜色图，形状为 [H, W, 3]
+            mask: 可选掩码，形状为 [H, W]，True表示有效像素
+            
+        返回:
+            smoothness_loss: 颜色平滑度损失
+        """
+        H, W, C = color_map.shape
+        
+        # 将颜色图转换为 [C, H, W] 格式
+        color_map_permuted = color_map.permute(2, 0, 1)
+        
+        # 计算水平和垂直方向的梯度
+        sobel_x_kernel = torch.tensor([[-1, 0, 1], 
+                                       [-2, 0, 2], 
+                                       [-1, 0, 1]], dtype=torch.float32, device=color_map.device).view(1, 1, 3, 3)
+        sobel_y_kernel = torch.tensor([[-1, -2, -1], 
+                                       [0, 0, 0], 
+                                       [1, 2, 1]], dtype=torch.float32, device=color_map.device).view(1, 1, 3, 3)
+        
+        # 对每个颜色通道计算梯度
+        grad_x_list = []
+        grad_y_list = []
+        
+        for c in range(C):
+            channel = color_map_permuted[c:c+1, :, :].unsqueeze(0)  # 形状: [1, 1, H, W]
+            grad_x = F.conv2d(channel, sobel_x_kernel, padding=1)
+            grad_y = F.conv2d(channel, sobel_y_kernel, padding=1)
+            grad_x_list.append(grad_x)
+            grad_y_list.append(grad_y)
+        
+        grad_x = torch.cat(grad_x_list, dim=1)  # 形状: [1, C, H, W]
+        grad_y = torch.cat(grad_y_list, dim=1)  # 形状: [1, C, H, W]
+        
+        # 计算梯度幅值
+        gradient_magnitude = torch.sqrt(grad_x**2 + grad_y**2 + 1e-8)
+        
+        if mask is not None:
+            # 扩展掩码以匹配梯度图的形状
+            mask_expanded = mask.unsqueeze(0).unsqueeze(0)  # 形状: [1, 1, H, W]
+            mask_expanded = mask_expanded.expand(1, C, H, W)
+            
+            # 只计算有效像素的梯度
+            valid_gradient = gradient_magnitude * mask_expanded
+            valid_count = mask_expanded.sum()
+            
+            if valid_count > 0:
+                loss = valid_gradient.sum() / valid_count
+            else:
+                loss = torch.tensor(0.0, device=color_map.device)
+        else:
+            # 计算所有像素的平均梯度
+            loss = gradient_magnitude.mean()
+        
+        return loss
+
+    def _color_constancy_loss(self, pred_color, tgt_color):
+        """
+        计算颜色一致性损失
+        
+        参数:
+            pred_color: 预测的颜色图，形状为 [H, W, 3]
+            tgt_color: 目标颜色图，形状为 [H, W, 3]
+            
+        返回:
+            constancy_loss: 颜色一致性损失
+        """
+        # 计算pred_color和tgt_color之间的平均颜色
+        pred_mean_color = pred_color.mean(dim=(0, 1))  # 形状: [3]
+        tgt_mean_color = tgt_color.mean(dim=(0, 1))  # 形状: [3]
+        # 计算平均颜色之间的L2距离
+        constancy_loss = F.mse_loss(pred_mean_color, tgt_mean_color)
+        return constancy_loss
 
     def test_loss_function(self, pred_intersects, tgt_intersect, tgt_maps, labels):
+        """测试阶段的损失函数"""
         i_loss_fn = IntersectionLoss()
-        # ssim_loss = StructuralSimilarityIndexMeasure(data_range=1.0).to(labels.device)
         tgt_normal_map, tgt_color_map = tgt_maps
-        # tgt_normal_map = tgt_maps
-        loss = 0.0
-        pred_pos, pred_norm, pred_color, pred_hit = pred_intersects
-        # pred_pos, pred_norm, pred_hit = pred_intersects
-        tgt_pos, tgt_norm, tgt_color, tgt_hit = tgt_intersect
-        # tgt_pos, tgt_norm, tgt_hit = tgt_intersect
-        pred_hit_mask = pred_hit > 0.5
-        # tgt_hit_mask = tgt_hit > 0.5
-        # pred_hit_mask = tgt_hit_mask
-        if pred_hit_mask.any():
-            pred_hit_norm = pred_norm[pred_hit_mask]
-            pred_hit_color = pred_color[pred_hit_mask]
-            pred_hit_rays = labels[pred_hit_mask]
-            unique_ray_mask = torch.cat([torch.tensor([1], dtype=torch.bool, device=labels.device), pred_hit_rays[1:] != pred_hit_rays[:-1]], dim=0)
-            unique_pred_hit_norm = pred_hit_norm[unique_ray_mask]
-            unique_pred_hit_color = pred_hit_color[unique_ray_mask]
-            unique_pred_hit_rays = pred_hit_rays[unique_ray_mask]
-            pred_normal_map = self.remapping_image(unique_pred_hit_rays, unique_pred_hit_norm, fill=0)
-            pred_color_map = self.remapping_image(unique_pred_hit_rays, unique_pred_hit_color, fill=0)
-        else:
-            pred_normal_map = torch.full_like(tgt_normal_map, fill_value=0)
-            pred_color_map = torch.full_like(tgt_color_map, fill_value=0)
-        ssim_norm = 1.0 - self.ssim_loss(pred_normal_map.permute(2,0,1).unsqueeze(0), tgt_normal_map.permute(2,0,1).unsqueeze(0))
-        ssim_color = 1.0 - self.ssim_loss(pred_color_map.permute(2,0,1).unsqueeze(0), tgt_color_map.permute(2,0,1).unsqueeze(0))
+        
+        # 创建填充张量的函数
+        def create_fill_tensors():
+            return (torch.full_like(tgt_normal_map, fill_value=0),
+                   torch.full_like(tgt_color_map, fill_value=0))
+        
+        # 提取预测结果
+        pred_normal_map, pred_color_map, pred_hit_mask = self._extract_hit_predictions(
+            pred_intersects, labels, create_fill_tensors
+        )
+        
+        # 计算各项损失
+        ssim_norm = self._calculate_ssim_loss(pred_normal_map, tgt_normal_map)
+        ssim_color = self._calculate_ssim_loss(pred_color_map, tgt_color_map)
         iloss = i_loss_fn(pred_intersects, tgt_intersect)
-        loss = iloss + ssim_norm * 0.3 + ssim_color * 0.3
-        # loss = iloss + ssim_norm * 0.3
-        return loss, pred_normal_map, pred_color_map
-        # return loss, pred_normal_map
+        
+        # 总损失
+        total_loss = (iloss + 
+                     ssim_norm * self.loss_weights['test_ssim_norm'] + 
+                     ssim_color * self.loss_weights['test_ssim_color'])
+        
+        return total_loss, pred_normal_map, pred_color_map
 
     def loss_function(self, pred_intersects, tgt_intersect, tgt_maps, labels, epoch):
+        """训练阶段的损失函数"""
         i_loss_fn = IntersectionLoss()
-        # ssim_loss = StructuralSimilarityIndexMeasure(data_range=1.0).to(labels.device)
-        loss_weights = self.get_gaussian_loss_weights(epoch, total_epochs=self.FLAGS.SOLVER.max_epoch, num_groups=len(pred_intersects), sigma=1, steepness=6)
+        loss_weights = self._get_gaussian_loss_weights(
+            epoch, self.FLAGS.SOLVER.max_epoch, len(pred_intersects)
+        )
         tgt_normal_map, tgt_color_map = tgt_maps
-        # tgt_normal_map = tgt_maps
-        loss = 0.0
-        for loss_weight, intersect in list(zip(loss_weights, pred_intersects)):
-            pred_pos, pred_norm, pred_color, pred_hit = intersect
-            # pred_pos, pred_norm, pred_hit = intersect
-            pred_hit_mask = pred_hit > 0.5
-            if pred_hit_mask.any():
-                # pred_hit_pos = pred_pos[pred_hit_mask]
-                pred_hit_norm = pred_norm[pred_hit_mask]
-                pred_hit_color = pred_color[pred_hit_mask]
-                pred_hit_rays = labels[pred_hit_mask]
-                unique_ray_mask = torch.cat([torch.tensor([1], dtype=torch.bool, device=labels.device), pred_hit_rays[1:] != pred_hit_rays[:-1]], dim=0)
-                # unique_pred_hit_pos = pred_hit_pos[unique_ray_mask]
-                unique_pred_hit_norm = pred_hit_norm[unique_ray_mask]
-                unique_pred_hit_color = pred_hit_color[unique_ray_mask]
-                unique_pred_hit_rays = pred_hit_rays[unique_ray_mask]
-                # pred_position_map = dataset.remapping_image(unique_pred_hit_rays, unique_pred_hit_pos, fill=0)
-                pred_normal_map = self.remapping_image(unique_pred_hit_rays, unique_pred_hit_norm, fill=0)
-                pred_color_map = self.remapping_image(unique_pred_hit_rays, unique_pred_hit_color, fill=0)
-            else:
-                # pred_position_map = torch.zeros_like(tgt_position_map)
-                pred_normal_map = torch.full_like(tgt_normal_map, fill_value=0)
-                pred_color_map = torch.full_like(tgt_color_map, fill_value=0)
-            # ssim_pos = 1.0 - ssim_loss(pred_position_map.permute(2,0,1).unsqueeze(0), tgt_position_map.permute(2,0,1).unsqueeze(0))
-            ssim_norm = 1.0 - self.ssim_loss(pred_normal_map.permute(2,0,1).unsqueeze(0), tgt_normal_map.permute(2,0,1).unsqueeze(0))
-            ssim_color = 1.0 - self.ssim_loss(pred_color_map.permute(2,0,1).unsqueeze(0), tgt_color_map.permute(2,0,1).unsqueeze(0))
-            # criterion = torch.nn.CrossEntropyLoss()
+        
+        total_loss = 0.0
+        for loss_weight, intersect in zip(loss_weights, pred_intersects):
+            # 创建填充张量的函数
+            def create_fill_tensors():
+                return (torch.full_like(tgt_normal_map, fill_value=0),
+                       torch.full_like(tgt_color_map, fill_value=0))
+            
+            # 提取预测结果
+            pred_normal_map, pred_color_map, pred_hit_mask = self._extract_hit_predictions(
+                intersect, labels, create_fill_tensors
+            )
+            
+            # 计算各项损失
+            ssim_norm = self._calculate_ssim_loss(pred_normal_map, tgt_normal_map)
+            ssim_color = self._calculate_ssim_loss(pred_color_map, tgt_color_map)
             iloss = i_loss_fn(intersect, tgt_intersect)
-            loss = (iloss + ssim_norm * 0.3 + ssim_color * 1) * loss_weight + loss
-            # loss = (iloss + ssim_norm * 0.3) * loss_weight + loss
-            # loss = iloss * loss_weight + loss
-        return loss, pred_normal_map, pred_color_map
-        # return loss, pred_normal_map
-        # return loss
-    
+            smoothness_loss = self._color_smoothness_loss(pred_color_map, mask=pred_hit_mask)
+            constancy_loss = self._color_constancy_loss(pred_color_map, tgt_color_map)
+            
+            # 加权损失
+            weighted_loss = (iloss + 
+                            ssim_norm * self.loss_weights['ssim_norm'] + 
+                            ssim_color * self.loss_weights['ssim_color'] + 
+                            smoothness_loss * self.loss_weights['smoothness'] + 
+                            constancy_loss * self.loss_weights['constancy']) * loss_weight
+            total_loss += weighted_loss
+            
+        return total_loss, pred_normal_map, pred_color_map
+
     def accuracy(self, pred_maps, tgt_maps):
+        """计算精度指标（PSNR）"""
         pred_norm_map, pred_color_map = pred_maps
-        # pred_norm_map = pred_maps
         tgt_norm_map, tgt_color_map = tgt_maps
-        # tgt_norm_map = tgt_maps
-        # cal psnr
+        
+        # 计算颜色PSNR
         mse_color = torch.mean((pred_color_map - tgt_color_map) ** 2)
         psnr_color = -10.0 * torch.log10(mse_color + 1e-8)
+        
+        # 计算法线PSNR
         mse_norm = torch.mean((pred_norm_map - tgt_norm_map) ** 2)
         psnr_norm = -10.0 * torch.log10(mse_norm + 1e-8)
+        
         return psnr_color, psnr_norm
-        # return psnr_norm
-        # pred = visibilities.argmax(dim=-1)
-        # correct = pred.eq(labels).float().mean()
-        # return correct
-    
-    def get_gaussian_loss_weights(self, epoch, total_epochs = 100, num_groups = 6, sigma = 1, steepness = 6):
+
+    def _sigmoid(self, x, steepness):
+        """Sigmoid函数"""
+        return 1 / (1 + math.exp(-steepness * (x - 0.5)))
+
+    def _get_gaussian_loss_weights(self, epoch, total_epochs, num_groups):
+        """获取高斯分布损失权重"""
         progress = (epoch / total_epochs - 0.5) * 2 + 0.5
-        def sigmoid(x):
-            return 1 / (1 + math.exp(-steepness * (x - 0.5)))
-        mu = (sigmoid(progress) - 0.5) / (2 * sigmoid(1) - 1) + 0.5
+        mu = (self._sigmoid(progress, _GAUSSIAN_STEEPNESS) - 0.5) / (2 * self._sigmoid(1, _GAUSSIAN_STEEPNESS) - 1) + 0.5
+        
         x = torch.linspace(0, 1, num_groups)
-        group_weights = torch.exp(-torch.square((x - mu) / sigma) / 2) + 0.5
-        group_weights_normalized = group_weights / torch.sum(group_weights)
-        return group_weights_normalized
+        group_weights = torch.exp(-torch.square((x - mu) / _GAUSSIAN_SIGMA) / 2) + 0.5
+        return group_weights / torch.sum(group_weights)
+
+    def train_step(self, batch, epoch):
+        """训练步骤"""
+        batch = self.process_batch(batch, self.FLAGS.DATA.train)
+        pred_intersects, tgt_intersects, tgt_maps, labels = self.model_forward(batch)
+        loss, pred_norm_map, pred_color_map = self.loss_function(
+            pred_intersects, tgt_intersects, tgt_maps, labels, epoch
+        )
+        psnr_color, psnr_norm = self.accuracy((pred_norm_map, pred_color_map), tgt_maps)
+        
+        return {
+            'train/loss': loss,
+            'train/psnr_c': psnr_color,
+            'train/psnr_n': psnr_norm
+        }
+
+    def test_step(self, batch, iteration):
+        """测试步骤"""
+        batch = self.process_batch(batch, self.FLAGS.DATA.test)
+        
+        with torch.no_grad():
+            pred_intersects, tgt_intersects, tgt_maps, labels = self.model_forward(batch)
+            
+        loss, pred_norm_map, pred_color_map = self.test_loss_function(
+            pred_intersects, tgt_intersects, tgt_maps, labels
+        )
+        psnr_color, psnr_norm = self.accuracy((pred_norm_map, pred_color_map), tgt_maps)
+        
+        return {
+            'test/loss': loss,
+            'test/psnr_c': psnr_color,
+            'test/psnr_n': psnr_norm
+        }
+
+    def _train_backward_step(self, loss, flags):
+        """训练反向传播步骤"""
+        clip_grad = flags.clip_grad
+        
+        if self.use_amp:
+            self.scaler.scale(loss).backward()
+            if clip_grad > 0:
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), clip_grad)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            loss.backward()
+            if clip_grad > 0:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), clip_grad)
+            self.optimizer.step()
 
     def train_epoch(self, epoch):
+        """训练一个epoch"""
         self.model.train()
+        
         if self.world_size > 1:
             self.train_loader.sampler.set_epoch(epoch)
 
         flags = self.FLAGS.SOLVER
         train_tracker = AverageTracker()
         log_per_iter = flags.log_per_iter
-        rng = range(len(self.train_loader))
-        for it in tqdm(rng, ncols=80, leave=False, disable=self.disable_tqdm):
-            # clear cache every 50 iterations
+        
+        for it in tqdm(range(len(self.train_loader)), ncols=80, leave=False, disable=self.disable_tqdm):
+            # 定期清理缓存
             if flags.empty_cache > 0 and it % flags.empty_cache == 0:
                 torch.cuda.empty_cache()
 
-            # load data
+            # 加载数据
             batch = next(self.train_iter)
             batch['iter_num'] = it
             batch['epoch'] = epoch
 
-            # forward and backward
+            # 前向和反向传播
             self.optimizer.zero_grad(flags.zero_grad_to_none)
+            
             with torch.autocast('cuda', enabled=self.use_amp):
                 output = self.train_step(batch, epoch)
-                # 'train/loss' is a special key reserved for backward
                 loss = output['train/loss']
 
-            clip_grad = self.FLAGS.SOLVER.clip_grad
-            if self.use_amp:
-                self.scaler.scale(loss).backward()
-                if clip_grad > 0:
-                    self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), clip_grad)
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            else:
-                loss.backward()
-                if clip_grad > 0:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), clip_grad)
-                self.optimizer.step()
-
-            # track the averaged tensors
+            self._train_backward_step(loss, flags)
             train_tracker.update(output)
 
-            # output intermediate logs
+            # 输出中间日志
             if self.is_master and log_per_iter > 0 and it % log_per_iter == 0:
-                notes = 'iter: %d' % it
+                notes = f'iter: {it}'
                 train_tracker.log(epoch, msg_tag='- ', notes=notes, print_time=False)
 
-        # save logs
+        # 保存日志
         if self.world_size > 1:
             train_tracker.average_all_gather()
         if self.is_master:
             train_tracker.log(epoch, self.summary_writer)
 
     def test_epoch(self, epoch):
+        """测试一个epoch"""
         self.model.eval()
         test_tracker = AverageTracker()
-        rng = range(len(self.test_loader))
-        for it in tqdm(rng, ncols=80, leave=False, disable=self.disable_tqdm):
-            # clear cache every 50 iterations
+        
+        for it in tqdm(range(len(self.test_loader)), ncols=80, leave=False, disable=self.disable_tqdm):
+            # 定期清理缓存
             if it % 50 == 0 and self.FLAGS.SOLVER.empty_cache:
                 torch.cuda.empty_cache()
 
-            # forward
+            # 前向传播
             batch = next(self.test_iter)
             batch['iter_num'] = it
             batch['epoch'] = epoch
-            # with torch.no_grad():
             output = self.test_step(batch, it)
 
-            # track the averaged tensors
             test_tracker.update(output, record_time=False)
 
         if self.world_size > 1:
@@ -386,175 +484,171 @@ class VisSolver(Solver):
             self.save_best_checkpoint(test_tracker, epoch)
             test_tracker.log(epoch, self.summary_writer, self.log_file, msg_tag='=>')
 
+    def _prepare_ground_truth_maps(self, batch, device):
+        """准备真实值图像映射"""
+        hits = batch['hits']
+        labels = batch['labels']
+        positions = batch['positions']
+        normals = batch['normals']
+        colors = batch['colors']
+        
+        hit_mask = hits > 0.1
+        rays = labels[hit_mask]
+        pos = (positions[hit_mask] * (255 / 128)).byte()
+        norms = ((normals[hit_mask] + 1.0) / 2.0 * 255).byte()
+        cols = (colors[hit_mask] * 255).byte()
+        
+        H = W = _DEFAULT_H
+        gt_position_map = torch.zeros((H * W, 3), dtype=torch.uint8, device=device)
+        gt_normal_map = torch.zeros((H * W, 3), dtype=torch.uint8, device=device)
+        gt_col_map = torch.zeros((H * W, 3), dtype=torch.uint8, device=device)
+        gt_hit_map = torch.zeros((H * W, 3), dtype=torch.uint8, device=device)
+
+        gt_position_map[rays] = pos
+        gt_normal_map[rays] = norms
+        gt_col_map[rays] = cols
+        gt_hit_map[rays] = 255
+
+        return torch.cat([
+            gt_position_map.view(H, W, 3),
+            gt_normal_map.view(H, W, 3),
+            gt_col_map.view(H, W, 3),
+            gt_hit_map.view(H, W, 3)
+        ], dim=1)
+
+    def _prepare_vertex_features(self, octree, vert_feat):
+        """准备顶点特征用于渲染"""
+        n_vertices, vert_indexes = octree.compute_vertices(7)
+        assert vert_feat.shape[0] == vert_indexes.shape[0]
+        
+        all_vertices = torch.zeros(
+            (n_vertices * 8, vert_feat.shape[1] // 8 + 1),
+            dtype=vert_feat.dtype, device=vert_feat.device
+        )
+        
+        vert_indexes_expanded = vert_indexes * 8 + torch.arange(8, device=vert_indexes.device).unsqueeze(0)
+        vert_feat_with_i = torch.cat([
+            vert_feat.view(vert_indexes.shape[0] * 8, -1),
+            torch.ones((vert_indexes.shape[0] * 8, 1), device=vert_feat.device)
+        ], dim=1)
+        
+        all_vertices[vert_indexes_expanded.view(-1)] = vert_feat_with_i.view(vert_indexes.shape[0] * 8, -1)
+        
+        # 计算平均特征
+        sum_features = all_vertices.view(-1, 8, vert_feat.shape[1] // 8 + 1)[:, :, :-1].sum(dim=1)
+        count = all_vertices.view(-1, 8, vert_feat.shape[1] // 8 + 1)[:, :, -1:].sum(dim=1)
+        return sum_features / count
+
     def render(self):
+        """渲染场景"""
         self.manual_seed()
         self.config_model()
         self.configure_log(set_writer=False)
         self.config_dataloader(disable_train_data=True)
         self.load_checkpoint()
         self.model.eval()
-        rng = range(len(self.test_loader))
-        # read camera matrices
-        for it in tqdm(rng, ncols=80, leave=False, disable=self.disable_tqdm):
+        
+        for it in tqdm(range(len(self.test_loader)), ncols=80, leave=False, disable=self.disable_tqdm):
             filename = self.test_loader.dataset.filenames[it]
-            # print(filename)
             object_name, frame_name = filename.split('/')
-            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            # data_path = os.path.join("/data/wangjh/transforms_extracted", object_name)
-            data_path = os.path.join("/mnt/sdc/wangjh/pytorch3d_render_colmap/render_shapenet_results/02958343/render_16views", object_name)
-            # print(object_name)
-            # exit(0)
-            frames, camera_matrix = read_transforms(os.path.join(data_path, 'transforms.json'), device)
-            frame_id = frame_name.split('.')[0]
-            frame_id = int(frame_id)
-            frame = frames[frame_id]
-            transform_matrix = torch.tensor(frame['transform_matrix'], dtype=torch.float32, device=device)
-            transform_matrices = [transform_matrix]
-            # clear cache every 50 iterations
+            
+            # 定期清理缓存
             if it % 50 == 0 and self.FLAGS.SOLVER.empty_cache:
                 torch.cuda.empty_cache()
 
-            # forward
+            # 准备相机矩阵
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            data_path = os.path.join(
+                "/mnt/sdc/wangjh/pytorch3d_render_colmap/render_shapenet_results/02958343/render_16views",
+                object_name
+            )
+            
+            frames, camera_matrix = read_transforms(
+                os.path.join(data_path, 'transforms.json'), device
+            )
+            
+            frame_id = int(frame_name.split('.')[0])
+            frame = frames[frame_id]
+            transform_matrix = torch.tensor(
+                frame['transform_matrix'], dtype=torch.float32, device=device
+            )
+            transform_matrices = [transform_matrix]
+
+            # 前向传播
             batch = next(self.test_iter)
             batch = self.process_batch(batch, self.FLAGS.DATA.test)
-            octree, points, pins, pouts, indices, hits, positions, normals, colors, labels = \
-                batch['octree'], batch['points'], batch['pins'], batch['pouts'], batch['indices'], \
-                batch['hits'], batch['positions'], batch['normals'], batch['colors'], batch['labels']
-            hit_mask = hits > 0.1
-            rays = labels[hit_mask]
-            pos = (positions[hit_mask] * (255 / 128)).byte()
-            norms = ((normals[hit_mask] + 1.0) / 2.0 * 255).byte()
-            cols = (colors[hit_mask] * 255).byte()
-            H = W = 512
-            gt_position_map = torch.zeros((H * W, 3), dtype=torch.uint8, device=device)
-            gt_normal_map = torch.zeros((H * W, 3), dtype=torch.uint8, device=device)
-            gt_col_map = torch.zeros((H * W, 3), dtype=torch.uint8, device=device)
-            gt_hit_map = torch.zeros((H * W, 3), dtype=torch.uint8, device=device)
-
-            gt_position_map[rays] = pos
-            gt_normal_map[rays] = norms
-            gt_col_map[rays] = cols
-            gt_hit_map[rays] = 255
-
-            gt_img = torch.cat([gt_position_map.view(H, W, 3), gt_normal_map.view(H, W, 3), gt_col_map.view(H, W, 3), gt_hit_map.view(H, W, 3)], dim=1)
-            # gt_img = torch.cat([gt_position_map.view(H, W, 3), gt_normal_map.view(H, W, 3), gt_hit_map.view(H, W, 3)], dim=1)
-            input_feature = self.get_input_feature(batch['octree'], self.FLAGS.MODEL)
-            # print(input_feature.shape)
-            # query_pts = torch.cat([points.points, points.batch_id], dim=1)
-            # viewdirs = self.embedder(viewdirs.view(-1, 3))
+            
+            # 准备真实值图像
+            gt_img = self._prepare_ground_truth_maps(batch, device)
+            
+            # 提取特征
+            octree = batch['octree']
+            labels = batch['labels']
+            normals = batch['normals']
+            colors = batch['colors']
+            positions = batch['positions']
+            pins = batch['pins']
+            pouts = batch['pouts']
+            indices = batch['indices']
+            
             tgt_normal_map = self.remapping_image(labels, normals, fill=0)
             tgt_color_map = self.remapping_image(labels, colors, fill=0)
             tgt_local_pos = self.local_position_encoder.encode(positions)
             directions = F.normalize(pouts - pins, dim=-1)
+            
+            input_feature = self.get_input_feature(octree, self.FLAGS.MODEL)
             vert_feat = self.model.feature_model(input_feature, octree, octree.depth)
-            # print(vert_feat.shape)
-            n_vertices, vert_indexes = octree.compute_vertices(7)
-            assert vert_feat.shape[0] == vert_indexes.shape[0]
-            all_vertieces = torch.zeros((n_vertices * 8, vert_feat.shape[1] // 8 + 1), dtype=vert_feat.dtype, device=vert_feat.device)
-            vert_indexes_expanded = vert_indexes * 8 + torch.arange(8, device=vert_indexes.device).unsqueeze(0)
-            vert_feat_with_i = torch.cat([vert_feat.view(vert_indexes.shape[0] * 8, -1), torch.ones((vert_indexes.shape[0] * 8, 1), device=vert_feat.device)], dim=1)
-            all_vertieces[vert_indexes_expanded.view(-1)] = vert_feat_with_i.view(vert_indexes.shape[0] * 8, -1)
-            average_feat = all_vertieces.view(-1,8, vert_feat.shape[1] // 8 + 1)[:, :, :-1].sum(dim=1) / all_vertieces.view(-1,8, vert_feat.shape[1] // 8 + 1)[:, :, -1:].sum(dim=1)
-            renderer = Renderer(self.model.renderer_model, average_feat, vert_indexes, octree, transform_matrices, depth=7)
+            
+            # 准备顶点特征
+            average_feat = self._prepare_vertex_features(octree, vert_feat)
+            
+            # 渲染
+            renderer = Renderer(
+                self.model.renderer_model, average_feat, 
+                octree.compute_vertices(7)[1], octree, transform_matrices, depth=7
+            )
+            
             output_dir = os.path.join(self.FLAGS.SOLVER.logdir, 'rendering_views')
             os.makedirs(output_dir, exist_ok=True)
-            renderer.render(save_images=True, save_video=False, output_dir=output_dir, object_name=object_name, gt_img=[gt_img], frame_ids=[frame_id])
-            # batch['iter_num'] = it
-            # batch['epoch'] = epoch
-            # with torch.no_grad():
-            # output = self.test_step(batch, it)
+            
+            renderer.render(
+                save_images=True, save_video=False, output_dir=output_dir,
+                object_name=object_name, gt_img=[gt_img], frame_ids=[frame_id]
+            )
+            
+            if self.FLAGS.SOLVER.save_video:
+                #save video
+                video_transform = Renderer.generate_views(120)
+                video_renderer = Renderer(
+                    self.model.renderer_model, average_feat,
+                    octree.compute_vertices(7)[1], octree, video_transform, depth=7
+                )
+
+                video_output_dir = os.path.join(self.FLAGS.SOLVER.logdir, 'rendering_videos')
+                os.makedirs(video_output_dir, exist_ok=True)
+                video_renderer.render(
+                    save_images=False, save_video=True, output_dir=video_output_dir,
+                    object_name=object_name, gt_img=None, frame_ids=None
+                )
 
     @classmethod
     def worker(cls, rank, FLAGS):
-        # Set the GPU to use.
+        """多进程工作函数"""
         gpu = FLAGS.SOLVER.gpu
         torch.cuda.set_device(gpu[rank])
 
         world_size = len(gpu)
-        # print('World size: ', world_size)
         if world_size > 1:
-            # Initialize the process group. Currently, the code only supports the
-            # `single node + multiple GPU` mode.
-            url = 'tcp://localhost:%d' % FLAGS.SOLVER.port
+            url = f'tcp://localhost:{FLAGS.SOLVER.port}'
             torch.distributed.init_process_group(
-                backend='nccl', init_method=url, world_size=world_size, rank=rank, timeout=timedelta(seconds=7200))
+                backend='nccl', init_method=url, world_size=world_size, 
+                rank=rank, timeout=timedelta(seconds=7200)
+            )
 
-        # The master process is responsible for logging, writing and loading
-        # checkpoints. In the multi-GPU setting, we assign the master role to
-        # the rank 0 process.
         is_master = rank == 0
         the_solver = cls(FLAGS, is_master)
         the_solver.run()
 
 
-    # def get_dataloader(self, flags):
-    #     dataset, collate_fn = self.get_dataset(flags)
-
-    #     if self.world_size > 1:
-    #         sampler = DistributedInfSampler(dataset, shuffle=flags.shuffle)
-    #     else:
-    #         sampler = InfSampler(dataset, shuffle=flags.shuffle)
-
-    #     data_loader = torch.utils.data.DataLoader(
-    #         dataset, batch_size=flags.batch_size, num_workers=flags.num_workers,
-    #         sampler=sampler, collate_fn=collate_fn)
-    #     return data_loader
-    # thsolver v1.2.1, have bugs, to be fixed
-    # def train_epoch(self, epoch):
-    #     self.model.train()
-    #     if self.world_size > 1:
-    #         self.train_loader.sampler.set_epoch(epoch)
-
-    #     flags = self.FLAGS.SOLVER
-    #     avg_tracker = AverageTracker()
-    #     rng = range(len(self.train_loader))
-    #     for it in tqdm(rng, ncols=80, leave=False, disable=self.disable_tqdm):
-    #     # clear cache every 50 iterations
-    #         if flags.empty_cache > 0 and it % flags.empty_cache == 0:
-    #             torch.cuda.empty_cache()
-
-    #         # load data
-    #         batch = next(self.train_iter)
-    #         batch['iter_num'] = it
-    #         batch['epoch'] = epoch
-
-    #         # forward and backward
-    #         self.optimizer.zero_grad(flags.zero_grad_to_none)
-    #         with torch.autocast('cuda', enabled=self.use_amp):
-    #             output = self.train_step(batch, epoch)
-    #             # 'train/loss' is a special key reserved for backward
-    #             loss = output['train/loss']
-
-    #         clip_grad = self.FLAGS.SOLVER.clip_grad
-    #         if self.use_amp:
-    #             self.scaler.scale(loss).backward()
-    #             if clip_grad > 0:
-    #                 self.scaler.unscale_(self.optimizer)
-    #                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), clip_grad)
-    #             self.scaler.step(self.optimizer)
-    #             self.scaler.update()
-    #         else:
-    #             loss.backward()
-    #             if clip_grad > 0:
-    #                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), clip_grad)
-    #             self.optimizer.step()
-
-    #         # track the averaged tensors
-    #         avg_tracker.update(output)
-    #         avg_tracker.record_time()
-
-    #         # output intermediate logs
-    #         log_per_iter = flags.log_per_iter
-    #         if self.is_master and log_per_iter > 0 and it % log_per_iter == 0:
-    #             notes = 'iter: %d' % it
-    #             avg_tracker.log(epoch, msg_tag='- ', notes=notes, print_time=False)
-
-    #     # save logs
-    #     if self.world_size > 1:
-    #         avg_tracker.average_all_gather()
-    #     if self.is_master:
-    #         avg_tracker.log(epoch, self.summary_writer, print_time=True)
-
-
 if __name__ == "__main__":
-   VisSolver.main()
+    VisSolver.main()

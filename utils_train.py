@@ -5,7 +5,6 @@ import json
 import os
 from typing import Tuple, List, Dict
 
-# from sparse_voxels import SparseVoxels, create_sparse_voxels_from_points
 from octree import Octree
 
 def read_transforms(json_path: str, device = 'cuda') -> Tuple[List[Dict], torch.Tensor]:
@@ -204,37 +203,3 @@ def query_valid_ray_voxel_pair(origins: torch.Tensor, dirs: torch.Tensor, octree
     # print(hits.count_nonzero().item())
 
     return pin, pout, indices, hits, positions, normals, colors, tags
-
-
-def merge_sparse_voxels(voxels0: torch.Tensor, voxels1: torch.Tensor):
-    all_voxels = torch.cat([voxels0, voxels1], dim=0)
-    return torch.unique(all_voxels, dim=0)
-
-def get_sparse_voxels(data_path: str, depth: int, device: torch.device):
-    scale = 1 << depth
-    print(f'scale: {scale}')
-
-    frames, camera_matrix = read_transforms(os.path.join(data_path, 'transforms.json'), device)
-
-    all_sparse_voxels = torch.zeros(0, 3, dtype=torch.int, device=device)
-
-    for i, frame in enumerate(frames):
-
-        transform_matrix = torch.tensor(frame['transform_matrix'], dtype=torch.float, device=device)
-        file_path = frame['file_path'].split('.')[0]
-        depth_min, depth_max = frame['depth']['min'], frame['depth']['max']
-
-        depth_image = read_image(os.path.join(data_path, f'{file_path}_depth.png')).to(device=device)
-        normal_image = read_image(os.path.join(data_path, f'{file_path}_normal.png'))[:,:,:3].to(device=device)
-
-        valid = (depth_image != 65535).reshape(-1)
-        depth_image = depth_image.float() * ((depth_max - depth_min) / 65535.0) + depth_min
-        origins, dirs, points, normals = create_point_cloud(depth_image, normal_image, camera_matrix, transform_matrix)
-
-        valid_points = points[valid] + 0.5 # (-0.5, 0.5)
-        sparse_voxels = torch.unique(torch.clip(torch.floor(valid_points * scale).int(), 0, scale-1), dim=0)
-        all_sparse_voxels = merge_sparse_voxels(all_sparse_voxels, sparse_voxels)
-        # print(all_sparse_voxels.max(), sparse_voxels.max())
-        
-    return all_sparse_voxels
-
