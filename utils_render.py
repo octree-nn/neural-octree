@@ -84,6 +84,7 @@ class Renderer:
 
     @staticmethod
     def render_frame(transform_matrix: torch.Tensor, camera_matrix: torch.Tensor, sparse_voxels: Octree, model: NeuralRendererModel, v_feats, v_idxs, depth: int, scale: int, W: int, H: int, max_batch_size = 262144, device = 'cuda'):
+        local_position_encode = LocalPositionEncoder(depth)
         B = H * W
         origins, dirs = generate_rays(camera_matrix, transform_matrix)
         origins = origins * scale + scale / 2
@@ -142,7 +143,7 @@ class Renderer:
                     # pos, norm, hit = model(pin, F.normalize(pout - pin, dim=1), query_v_feats)
                     hit_mask = hit > 0.5
                     if hit_mask.any():
-                        pos = self.local_position_encode.decode(pos[hit_mask], cxyz[hit_mask]) # pos[hit_mask] + cxyz[hit_mask]
+                        pos = local_position_encode.decode(pos[hit_mask], cxyz[hit_mask]) # pos[hit_mask] + cxyz[hit_mask]
                         norm = norm[hit_mask]
                         color = color[hit_mask]
                         labels = labels[hit_mask]
@@ -176,7 +177,7 @@ class Renderer:
                 # pos_mask = pos[hit_mask]
                 # print(f'pos_mask min: {pos_mask.min(dim=0).values}, max: {pos_mask.max(dim=0).values}')
                 if hit_mask.any():
-                    pos = self.local_position_encode.decode(pos[hit_mask], chosen_cxyz[hit_mask]) # pos[hit_mask] + chosen_cxyz[hit_mask]
+                    pos = local_position_encode.decode(pos[hit_mask], chosen_cxyz[hit_mask]) # pos[hit_mask] + chosen_cxyz[hit_mask]
                     # print(f'pos min: {pos.min(dim=0).values}, max: {pos.max(dim=0).values}')
                     norm = norm[hit_mask]
                     color = color[hit_mask]

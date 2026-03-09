@@ -100,8 +100,8 @@ DATA:
     # location: /home/wangjh/render_16views
     # filelist: /data/wangjh/NeuOctree_1208/cache/depth5/02958343_car/filelist/train.txt
     # filelist: test.txt
-    # filelist: test.txt
-    filelist: train1.txt
+    filelist: test.txt
+    # filelist: train1.txt
     # filelist: data/ShapeNet/ShapeNet_NV_simplified_with_normal/filelist/best_view.txt
     batch_size: 1
     shuffle: False

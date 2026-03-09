@@ -96,7 +96,7 @@ class ReadNpz:
     return output
 
 def get_shapenet_dataset(flags):
-    transform = ShapeNetTransform(noise=flags.noise, take=flags.takes, random=flags.random, missing=flags.missing)
+    transform = ShapeNetTransform()
     read_ply = ReadNpz(has_normal=True, has_label=True)
     dataset = Dataset(flags.location, flags.filelist, transform,
                       read_file=read_ply, take=flags.take)

@@ -12,7 +12,7 @@ from models import PNCHLoss as IntersectionLoss
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 from thsolver.tracker import AverageTracker
 from datetime import timedelta
-from RayDataset import Renderer
+from utils_render import Renderer
 from utils_train import read_transforms
 import math
 
