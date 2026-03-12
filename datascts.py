@@ -38,11 +38,21 @@ class ReadNpz:
 
   def __call__(self, filename: str, q_depth=7):
     data_path = filename.rsplit('/', 1)[0]
-    i = filename.rsplit('/', 1)[1].split('.')[0]
-    sub_data_path = data_path.rsplit('/', 1)[1]
-    pcd_path = "/mnt/sdc/wangjh/pytorch3d_render_colmap/render_shapenet_results_pcd2pth/02958343/pcd/" + sub_data_path + '/pcd.pth'
+    i = filename.rsplit('/', 1)[1]
+    # i = filename.rsplit('/', 1)[1].split('.')[0]
+    sub_data_path = data_path.rsplit('/', 2)[1] + '/' + data_path.rsplit('/', 1)[1]
+    pcd_path = "/mnt/sdb/wangjh/data_neuoct/ShapeNet/pcd_50w/" + sub_data_path + '/pointcloud.pth'
+    # pcd_path = "/mnt/sdb/wangjh/data_neuoct/ShapeNet/pcdfromrgb/" + sub_data_path + '/pointcloud.pth'
+    # pcd_path = "/mnt/sdc/wangjh/pytorch3d_render_colmap/render_shapenet_results_pcd2pth/02958343/pcd/" + sub_data_path + '/pcd.pth'
+    # npz_path = "/mnt/sdc/wangjh/Rasterize-to-Pointcloud/data/ShapeNet/pcdfromrgb/" + sub_data_path + '/pointcloud.npz'
+    # npz_path = data_path + '/pointcloud.npz'
     # pcd_path = os.path.join(data_path, 'pcd.pth')
     points, colors = torch.load(pcd_path, weights_only=True)
+    # data = np.load(npz_path)
+    # points = data['points']
+    # colors = data['colors']
+    # points_torch = torch.from_numpy(data['points']).cuda()
+    # colors_torch = torch.from_numpy(data['colors']).cuda()
     points_torch = points.cuda()
     colors_torch = colors.cuda()
 
@@ -57,7 +67,8 @@ class ReadNpz:
     points = Points(points_torch, features=colors_torch)
     # bbmin, bbmax = points.bbox()
     # points.normalize(bbmin, bbmax, scale=1)
-    points.points = points.points * 1.98
+    # points.points = points.points * 1.98
+    points.points = points.points * 0.99
 
     octree = Octree(depth=9, device='cuda')
     octree.build_octree(points)
@@ -67,12 +78,13 @@ class ReadNpz:
     transform_matrix = torch.tensor(frame['transform_matrix'], dtype=torch.float, device='cuda')
     normal_image = read_image(os.path.join(data_path, f'{file_path}_normal.png'))[:,:,:3].cuda()
     depth_image = read_image(os.path.join(data_path, f'{file_path}_depth.png')).cuda()
-    albedo_image = read_image(os.path.join(data_path, f'{file_path}_albedo.png'))[:,:,:3].cuda()
+    albedo_image = read_image(os.path.join(data_path, f'{file_path}.png'))[:,:,:3].cuda()
+    # albedo_image = read_image(os.path.join(data_path, f'{file_path}_albedo.png'))[:,:,:3].cuda()
     valid = (depth_image != 65535).reshape(-1)
     depth_image = depth_image.float() * (depth_max - depth_min) / 65535.0 + depth_min
     origins, dirs, points, normals, albedo = create_point_cloud_color(depth_image, normal_image, albedo_image, camera_matrix, transform_matrix)
-    points = points * 0.99
-    origins = origins * 0.99
+    points = points * 0.99 * 0.5
+    origins = origins * 0.99 * 0.5
     scale = 1 << q_depth
     half_scale = scale >> 1
     points = points * scale + half_scale

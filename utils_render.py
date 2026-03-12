@@ -77,7 +77,6 @@ class Renderer:
 
         end_time = time()
         delta_time = end_time - start_time
-        # print(f'Finish rendering {len(iterator)} frames in {delta_time:.2f}s, fps = {len(iterator) / delta_time:.2f}', flush=True)
 
         if save_video:
             writer.release()
@@ -87,6 +86,7 @@ class Renderer:
         local_position_encode = LocalPositionEncoder(depth)
         B = H * W
         origins, dirs = generate_rays(camera_matrix, transform_matrix)
+        origins = origins * 0.99 * 0.5
         origins = origins * scale + scale / 2
         invdirs = 1.0 / (torch.where(torch.abs(dirs) < 1e-10, 1e-10, dirs))
         planes = torch.arange(0, scale + 1, dtype=torch.float32, device=device)
@@ -136,7 +136,6 @@ class Renderer:
             model.eval()
             while True:
                 if len(labels) <= max_batch_size:
-                    # print(indices.shape)
                     query_v_indexes = v_idxs[indices].view(-1, 2, 2, 2)
                     query_v_feats = v_feats[query_v_indexes]
                     pos, norm, color, hit = model(pin, F.normalize(pout - pin, dim=1), query_v_feats)
@@ -175,10 +174,8 @@ class Renderer:
                 # pos, norm, hit = model(chosen_pin, F.normalize(chosen_pout - chosen_pin, dim=1), query_v_feats)
                 hit_mask = hit > 0.5
                 # pos_mask = pos[hit_mask]
-                # print(f'pos_mask min: {pos_mask.min(dim=0).values}, max: {pos_mask.max(dim=0).values}')
                 if hit_mask.any():
                     pos = local_position_encode.decode(pos[hit_mask], chosen_cxyz[hit_mask]) # pos[hit_mask] + chosen_cxyz[hit_mask]
-                    # print(f'pos min: {pos.min(dim=0).values}, max: {pos.max(dim=0).values}')
                     norm = norm[hit_mask]
                     color = color[hit_mask]
                     hit_rays = chosen_labels[hit_mask]

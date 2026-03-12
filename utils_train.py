@@ -24,9 +24,10 @@ def read_image(image_path):
     return torch.from_numpy(np.array(Image.open(image_path)))
 
 def generate_directions(W, H, cx, cy, fx, fy, device = 'cuda'):
-    i, j = torch.meshgrid(torch.arange(W, dtype=torch.float32, device=device) + 0.5, torch.arange(H, dtype=torch.float32, device=device) + 0.5, indexing='xy')
+    # i, j = torch.meshgrid(torch.arange(W, dtype=torch.float32, device=device), torch.arange(H, dtype=torch.float32, device=device), indexing='xy')
+    i, j = torch.meshgrid(torch.arange(W, device=device) + 0.5, torch.arange(H, device=device) + 0.5, indexing='xy')
     # directions = torch.stack([-(i - cx) / fx, -(j - cy) / fy, torch.ones_like(i)], dim=-1) # pytorch3d camera coordinate system
-    directions = torch.stack([(i - cx) / fx, -(j - cy) / fy, -torch.ones_like(i)], dim=-1)
+    directions = torch.stack([-(i - cx) / fx, -(j - cy) / fy, torch.ones_like(i)], dim=-1)
     return directions
 
 def generate_rays(camera_matrix: torch.Tensor, transform_matrix: torch.Tensor):
@@ -34,6 +35,7 @@ def generate_rays(camera_matrix: torch.Tensor, transform_matrix: torch.Tensor):
     fx, fy, cx, cy = camera_matrix[0, 0], camera_matrix[1, 1], camera_matrix[0, 2], camera_matrix[1, 2]
     R, T = transform_matrix[:3, :3], transform_matrix[:3, 3]
     W, H = int(cx * 2), int(cy * 2)
+    R = R.transpose(0, 1)  # Invert rotation
 
     directions = generate_directions(W, H, cx, cy, fx, fy, device=device)
     dirs = directions @ R.T
@@ -47,6 +49,7 @@ def create_point_cloud(depth_image: torch.Tensor, normal_image: torch.Tensor, ca
     H, W = depth_image.shape
     fx, fy, cx, cy = camera_matrix[0, 0], camera_matrix[1, 1], camera_matrix[0, 2], camera_matrix[1, 2]
     R, T = transform_matrix[:3, :3], transform_matrix[:3, 3]
+    R = R.transpose(0, 1)  # Invert rotation
 
     directions = generate_directions(W, H, cx, cy, fx, fy, device=device)
     dirs = directions @ R.T
@@ -66,6 +69,7 @@ def create_point_cloud_color(depth_image: torch.Tensor, normal_image: torch.Tens
     H, W = depth_image.shape
     fx, fy, cx, cy = camera_matrix[0, 0], camera_matrix[1, 1], camera_matrix[0, 2], camera_matrix[1, 2]
     R, T = transform_matrix[:3, :3], transform_matrix[:3, 3]
+    R = R.transpose(0, 1)  # Invert rotation
 
     directions = generate_directions(W, H, cx, cy, fx, fy, device=device)
     dirs = directions @ R.T
@@ -79,10 +83,16 @@ def create_point_cloud_color(depth_image: torch.Tensor, normal_image: torch.Tens
 
     normals = normal_image.reshape(-1, 3).float() / 255.0 * 2.0 - 1.0
     #normals to BRG
-    normals = normals[:, [2, 0, 1]]
-    normals = normals * torch.tensor([1, -1, 1], device=device)
+    # normals = normals[:, [2, 0, 1]]
+    # normals = normals * torch.tensor([1, -1, 1], device=device)
 
     colors = color_image.reshape(-1, 3).float() / 255.0
+    # save points and colors to pcd
+    # import open3d as o3d
+    # pcd = o3d.geometry.PointCloud()
+    # pcd.points = o3d.utility.Vector3dVector(points_transformed.cpu().numpy())
+    # pcd.colors = o3d.utility.Vector3dVector(colors.cpu().numpy())
+    # o3d.io.write_point_cloud("half_pcd_trans.ply", pcd)
     return origins, dirs, points_transformed, normals, colors
 
 
@@ -141,7 +151,6 @@ def query_valid_ray_voxel_pair(origins: torch.Tensor, dirs: torch.Tensor, octree
     B = origins.shape[0]
 
     hit_ray_mask = (intersections[:, 0] != 0).unsqueeze(1)
-    # print(hit_ray_mask.count_nonzero())
 
     invdirs = 1.0 / dirs # (torch.where(torch.abs(dirs) < 1e-10, 1e-10, dirs))
 
@@ -156,8 +165,7 @@ def query_valid_ray_voxel_pair(origins: torch.Tensor, dirs: torch.Tensor, octree
     before_hit_mask = (t[:, :-1] <= t_hit)
     before_hit_mask_shifted = torch.cat([before_hit_mask[:, 1:], torch.zeros((B, 1), dtype=torch.bool, device=device)], dim=1)
     hit_mask = (before_hit_mask != before_hit_mask_shifted) & hit_ray_mask
-    # print(torch.count_nonzero(hit_mask))
-    # print(hit_mask.shape)
+
 
     xyz = origins[:, torch.newaxis, :] + t.unsqueeze(-1) * dirs[:, torch.newaxis, :]
     pin = xyz[:, :-1, :]
@@ -175,11 +183,10 @@ def query_valid_ray_voxel_pair(origins: torch.Tensor, dirs: torch.Tensor, octree
     hits = hits[mask1]
 
     p_query = ((pin + pout) / 2).long()
-    # print(p_query.shape, p_query.min(dim=0).values, p_query.max(dim=0).values)
     p_query_b = torch.cat([p_query, torch.zeros((p_query.shape[0], 1), dtype=torch.long, device=device)], dim=-1)
     all_index = octree.search_xyzb(p_query_b, depth, nempty=True)
     valid_mask = (all_index != -1)
-    # print(valid_mask.count_nonzero())
+
 
     grid_base = p_query[valid_mask]
     pin = pin[valid_mask] - grid_base
@@ -187,7 +194,6 @@ def query_valid_ray_voxel_pair(origins: torch.Tensor, dirs: torch.Tensor, octree
     tags = tags[valid_mask]
     hits = hits[valid_mask]
     indices = all_index[valid_mask]
-
     positions = intersections[tags, 1:4]
     # positions[hits < 0.5] = 0
     # positions = positions - torch.floor(positions)
@@ -200,6 +206,6 @@ def query_valid_ray_voxel_pair(origins: torch.Tensor, dirs: torch.Tensor, octree
     
     colors = intersections[tags, 7:10]
     # normals[hits < 0.5] = 0
-    # print(hits.count_nonzero().item())
+    # print(hits.count_nonzero())
 
     return pin, pout, indices, hits, positions, normals, colors, tags

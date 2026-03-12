@@ -550,7 +550,11 @@ class VisSolver(Solver):
         
         for it in tqdm(range(len(self.test_loader)), ncols=80, leave=False, disable=self.disable_tqdm):
             filename = self.test_loader.dataset.filenames[it]
-            object_name, frame_name = filename.split('/')
+            object_name, i = filename.rsplit('/', 1)
+            # i = filename.rsplit('/', 1)[1]
+            # i = filename.rsplit('/', 1)[1].split('.')[0]
+            # sub_data_path = data_path.rsplit('/', 1)[1]
+            # object_name, frame_name = filename.split('/')
             
             # 定期清理缓存
             if it % 50 == 0 and self.FLAGS.SOLVER.empty_cache:
@@ -558,21 +562,26 @@ class VisSolver(Solver):
 
             # 准备相机矩阵
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            # data_path = os.path.join(
+            #     "/mnt/sdc/wangjh/pytorch3d_render_colmap/render_shapenet_results/02958343/render_16views",
+            #     object_name
+            # )
             data_path = os.path.join(
-                "/mnt/sdc/wangjh/pytorch3d_render_colmap/render_shapenet_results/02958343/render_16views",
-                object_name
+                self.FLAGS.DATA.test.location, object_name
             )
             
             frames, camera_matrix = read_transforms(
                 os.path.join(data_path, 'transforms.json'), device
             )
             
-            frame_id = int(frame_name.split('.')[0])
+            frame_id = int(i)
             frame = frames[frame_id]
             transform_matrix = torch.tensor(
-                frame['transform_matrix'], dtype=torch.float32, device=device
+                frame['transform_matrix'], device=device
             )
             transform_matrices = [transform_matrix]
+
+            camera_angle_x = frame['camera_angle_x']
 
             # 前向传播
             batch = next(self.test_iter)
@@ -605,7 +614,7 @@ class VisSolver(Solver):
             # 渲染
             renderer = Renderer(
                 self.model.renderer_model, average_feat, 
-                octree.compute_vertices(7)[1], octree, transform_matrices, depth=7
+                octree.compute_vertices(7)[1], octree, transform_matrices, depth=7, camera_angle_x=camera_angle_x
             )
             
             output_dir = os.path.join(self.FLAGS.SOLVER.logdir, 'rendering_views')
