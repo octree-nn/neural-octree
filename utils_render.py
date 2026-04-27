@@ -51,7 +51,9 @@ class Renderer:
             object_dir = os.path.join(output_dir, object_name)
             os.makedirs(object_dir, exist_ok=True)
         elif save_video:
-            os.makedirs(output_dir, exist_ok=True)
+            category_dir = os.path.join(output_dir, object_name.split('/')[0])
+            os.makedirs(category_dir, exist_ok=True)
+            # os.makedirs(output_dir, exist_ok=True)
 
         if save_video:
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -73,6 +75,7 @@ class Renderer:
                     Image.fromarray(image).save(os.path.join(object_dir, f'{i}.png'))
             if save_video:
                 writer.write(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+                # print(f'Rendered frame {i+1}/{len(iterator)}')
 
 
         end_time = time()
@@ -229,27 +232,66 @@ class Renderer:
     def generate_views(num_views = 60, device = 'cuda'):
         phi = torch.linspace(0, 2 * torch.pi, num_views, dtype=torch.float, device=device)
         theta = torch.pi * 0.1 * torch.ones_like(phi)
-        x = 2 * torch.cos(theta) * torch.cos(phi)
-        y = 2 * torch.cos(theta) * torch.sin(phi)
-        z = 2 * torch.sin(theta)
+        # z = 2 * torch.cos(theta) * torch.cos(phi)
+        z = 2.5 * torch.cos(theta) * torch.sin(phi)
+        # x = 2 * torch.cos(theta) * torch.sin(phi)
+        y = 2.5 * torch.sin(theta)
+        # y = 2 * torch.sin(theta)
+        x = 2.5 * torch.cos(theta) * torch.cos(phi)
         camera_positions = torch.column_stack((x, y, z))
 
+        z_axis = F.normalize(-camera_positions, dim=1, eps=1e-5)
+        up = torch.tensor([0.0, 1.0, 0.0], dtype=torch.float, device=device)
+        x_axis = F.normalize(torch.cross(up.unsqueeze(0).expand_as(z_axis), z_axis, dim=1), eps=1e-5)
+        y_axis = F.normalize(torch.cross(z_axis, x_axis, dim=1), eps=1e-5)
+        is_close = torch.isclose(x_axis, torch.tensor(0.0, device=device), atol=5e-3).all(dim=1, keepdim=True)
+        if is_close.any():
+            replacement = F.normalize(torch.cross(y_axis, z_axis, dim=1), eps=1e-5)
+            x_axis = torch.where(is_close, replacement, x_axis)
+        R = torch.stack((x_axis, y_axis, z_axis), dim=1)
         transform_matrices = []
-        for T in camera_positions:
-            t0, t1, t2 = T
-            norm_T = torch.norm(T, keepdim=True)
-            col2 = T / norm_T
-            if torch.isclose(t0, torch.zeros_like(t0)) & torch.isclose(t1, torch.zeros_like(t1)):
-                col0 = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float, device=device)
-            else:
-                col0 = torch.tensor([-t1, t0, 0.0], dtype=torch.float, device=device)
-                norm_col0 = torch.norm(col0, keepdim=True)
-                col0 /= norm_col0
-            col1 = torch.cross(col2, col0, dim=0)
-            R = torch.column_stack((col0, col1, col2))
+        for i in range(num_views):
+            R_i = R[i]
+            T_i = camera_positions[i]
             transform_matrix = torch.eye(4, dtype=torch.float, device=device)
-            transform_matrix[:3, :3] = R
-            transform_matrix[:3, 3] = T
+            transform_matrix[:3, :3] = R_i  # Invert rotation
+            transform_matrix[:3, 3] = T_i
             transform_matrices.append(transform_matrix)
+
+
+        
+        # for T in camera_positions:
+        #     at = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float, device=device)
+        #     up = torch.tensor([0.0, 1.0, 0.0], dtype=torch.float, device=device)
+        #     camera_position = T
+        #     # print(f'Camera position: {camera_position}')
+        #     z_axis = F.normalize(at - camera_position, dim=0, eps=1e-5)
+        #     x_axis = F.normalize(torch.cross(up, z_axis), eps=1e-5)
+        #     y_axis = F.normalize(torch.cross(z_axis, x_axis), eps=1e-5)
+        #     is_close = torch.isclose(x_axis, torch.tensor(0.0), atol=5e-3).all(keepdim=True)
+        #     if is_close.any():
+        #         replacement = F.normalize(torch.cross(y_axis, z_axis), eps=1e-5)
+        #         x_axis = torch.where(is_close, replacement, x_axis)
+        #     R = torch.column_stack((x_axis, y_axis, z_axis))
+
+        #     # t0, t1, t2 = T
+        #     # norm_T = torch.norm(T, keepdim=True)
+        #     # col2 = T / norm_T
+        #     # if torch.isclose(t0, torch.zeros_like(t0)) & torch.isclose(t2, torch.zeros_like(t2)):
+        #     # # if torch.isclose(t0, torch.zeros_like(t0)) & torch.isclose(t1, torch.zeros_like(t1)):
+        #     #     col0 = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float, device=device)
+        #     # else:
+        #     #     col0 = torch.tensor([t2, 0.0, -t0], dtype=torch.float, device=device)
+        #     #     # col0 = torch.tensor([-t1, t0, 0.0], dtype=torch.float, device=device)
+        #     #     norm_col0 = torch.norm(col0, keepdim=True)
+        #     #     col0 /= norm_col0
+        #     # col1 = torch.cross(col2, col0, dim=0)
+        #     # R = torch.column_stack((col0, col1, col2))
+        #     R = R.transpose(0, 1)  # Invert rotation
+        #     transform_matrix = torch.eye(4, dtype=torch.float, device=device)
+        #     transform_matrix[:3, :3] = R
+        #     transform_matrix[:3, 3] = T
+        #     transform_matrices.append(transform_matrix)
+            
         transform_matrices = torch.stack(transform_matrices, dim=0)
         return transform_matrices

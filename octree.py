@@ -317,6 +317,34 @@ class Octree:
     if update_neigh:
       self.construct_neigh(depth)
 
+  def get_split(self, depth: int, nempty: bool = True):
+    r''' Returns the split status of octree nodes at the given depth.
+
+    Args:
+      depth (int): The depth of the octree layer.
+      nempty (bool): If True, consider only non-empty nodes.
+
+    Returns:
+      split (torch.Tensor): A tensor with shape (nnum[depth],) and dtype=torch.int32,
+          where 0 indicates empty node (not split) and 1 indicates non-empty node (split).
+    '''
+
+    children = self.children[depth]
+    # nempty_mask = self.nempty_mask(depth)
+    
+    if children is None:
+      # 如果children为None，说明该层还没有构建，返回全0
+      nnum = self.nnum[depth].item()
+      return torch.zeros(nnum, dtype=torch.int32, device=self.device)
+    else:
+      # 如果children[i] >= 0，表示该节点是有效的（有子节点），即split=1
+      # 如果children[i] == -1，表示该节点是空的，即split=0
+      # children_nempty = children[nempty_mask]  # 只考虑非空节点
+      # split = (children_nempty >= 0).int()  # split=1 for non-empty nodes, split=0 for empty nodes
+      split = (children >= 0).int()  # split=1 for non-empty nodes, split=0 for empty nodes
+      return split
+
+
   def octree_split(self, split: torch.Tensor, depth: int):
     r''' Sets whether the octree nodes in :attr:`depth` are splitted or not.
 
@@ -717,11 +745,13 @@ class Octree:
       """计算不重复的顶点坐标和每个体素的顶点索引"""
       nx, ny, nz, b = self.xyzb(target_depth, nempty=True)
       voxel_coords = torch.stack([nx, ny, nz], dim=1)  # (N, 3)
+      # exit(0)
       # 每个体素有8个顶点
       vertex_offsets = torch.tensor([
           [0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 1, 1],
           [1, 0, 0], [1, 0, 1], [1, 1, 0], [1, 1, 1]
       ], device=self.device, dtype=voxel_coords.dtype)  # (8, 3)
+
       # 计算所有体素的所有顶点坐标
       all_vertex_coords = voxel_coords.unsqueeze(1) + vertex_offsets.unsqueeze(0)  # (N, 8, 3)
       all_vertex_coords_flat = all_vertex_coords.reshape(-1, 3)  # (N*8, 3)

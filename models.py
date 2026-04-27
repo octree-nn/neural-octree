@@ -8,6 +8,7 @@ from ocnn.nn import OctreeConv, OctreeDeconv
 from typing import Dict, List, Tuple
 import torch.nn as nn
 import torch.nn.functional as F
+import copy
 
 
 def trilinear_interpolation(F: torch.Tensor, P: torch.Tensor) -> torch.Tensor:
@@ -392,6 +393,78 @@ class UNet(torch.nn.Module):
         # return convd[depth - self.encoder_stages]
         return deconv
 
+
+class UNet6(torch.nn.Module):
+    def __init__(self, in_channels: int, interp: str = 'linear', nempty: bool = True):
+        super(UNet6, self).__init__()
+        self.in_channels = in_channels
+        self.nempty = nempty
+        self.config_network()
+        self.encoder_stages = len(self.encoder_blocks)
+        self.decoder_stages = len(self.decoder_blocks)
+
+    # encoder
+        self.conv1 = OctreeConvBnRelu(in_channels, self.encoder_channel[0], nempty=nempty)
+        self.downsample = torch.nn.ModuleList([OctreeConvBnRelu(
+            self.encoder_channel[i], self.encoder_channel[i+1], kernel_size=[2],
+            stride=2, nempty=nempty) for i in range(self.encoder_stages)])
+        self.encoder = torch.nn.ModuleList([ocnn.modules.OctreeResBlocks(
+            self.encoder_channel[i+1], self.encoder_channel[i + 1],
+            self.encoder_blocks[i], self.bottleneck, nempty, self.resblk)
+            for i in range(self.encoder_stages)])
+
+    # decoder
+        channel = [self.decoder_channel[i+1] + self.encoder_channel[-i-2]
+                for i in range(self.decoder_stages)]
+        self.upsample = torch.nn.ModuleList([OctreeDeconvBnRelu(
+            self.decoder_channel[i], self.decoder_channel[i+1], kernel_size=[2],
+            stride=2, nempty=nempty) for i in range(self.decoder_stages)])
+        self.decoder = torch.nn.ModuleList([ocnn.modules.OctreeResBlocks(
+            channel[i], self.decoder_channel[i+1],
+            self.decoder_blocks[i], self.bottleneck, nempty, self.resblk)
+            for i in range(self.decoder_stages)])
+    #     self.header = ocnn.modules.Conv1x1(self.decoder_channel[-1], 63, use_bias=True)
+    #     self.octree_interp = ocnn.nn.OctreeInterp(interp, nempty)
+
+    def config_network(self):
+        self.encoder_channel = [32, 32, 64, 128, 256]
+        # self.decoder_channel = [256, 256, 128, 96, 96]
+        # single decoder
+        self.decoder_channel = [256, 256]
+        self.encoder_blocks = [2, 3, 4, 6]
+        self.decoder_blocks = [2]
+        self.bottleneck = 1
+        self.resblk = OctreeBnResBlock2
+
+
+    def unet_encoder(self, data: torch.Tensor, octree: Octree, depth: int):
+
+        convd = dict()
+        convd[depth] = self.conv1(data, octree, depth)
+        for i in range(self.encoder_stages):
+            d = depth - i
+            conv = self.downsample[i](convd[d], octree, d)
+            convd[d-1] = self.encoder[i](conv, octree, d-1)
+        return convd
+
+    def unet_decoder(self, convd: Dict[int, torch.Tensor], octree: Octree, depth: int):
+        deconv = convd[depth]
+        for i in range(self.decoder_stages):
+            d = depth + i
+            deconv = self.upsample[i](deconv, octree, d)
+            deconv = torch.cat([convd[d+1], deconv], dim=1)  # skip connections
+            deconv = self.decoder[i](deconv, octree, d+1)
+        return deconv
+
+    def forward(self, data: torch.Tensor, octree: Octree, depth: int):
+        convd = self.unet_encoder(data, octree, depth)
+        deconv = self.unet_decoder(convd, octree, depth - self.encoder_stages)
+        # deconv = self.header(deconv) # if mul instead of cat
+        # interp_depth = depth - self.encoder_stages + self.decoder_stages
+        # feature = self.octree_interp(deconv, octree, interp_depth, query_pts)
+        # return convd[depth - self.encoder_stages]
+        return deconv
+
     
 class ResidualFCLayer3(nn.Module):
     def __init__(self, dim: int):
@@ -421,12 +494,17 @@ class ResidualFCLayer3(nn.Module):
         return self.relu(self.norm3(out3))
 
 class NeuralIntersectionModel(nn.Module):
-    def __init__(self, in_channels: int):
+    def __init__(self, in_channels: int, q_depth: int=7):
         super().__init__()
         self.in_channels = in_channels
-        self.feature_model = UNet(in_channels=self.in_channels)
+        if q_depth == 6:
+            self.feature_model = UNet6(in_channels=self.in_channels)
+            self.renderer_model = SplitVoxelRendererModel(f_dim=32, n_iters=3)
+        else:
+            self.feature_model = UNet(in_channels=self.in_channels)
         # self.renderer_model = VoxelRendererModel(f_dim=16, n_iters=3)
-        self.renderer_model = SplitVoxelRendererModel(f_dim=16, n_iters=3)
+            self.renderer_model = SplitVoxelRendererModel(f_dim=16, n_iters=3)
+        self.q_depth = q_depth
 
     def forward(self, data: torch.Tensor, octree: Octree, depth: int, pin: torch.Tensor, direction: torch.Tensor, voxel_indices: torch.Tensor) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] | Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # 1. 特征提取
@@ -455,7 +533,7 @@ class NeuralIntersectionModel(nn.Module):
         2. 扩展特征维度
         3. 计算平均特征
         """
-        query_d = 7
+        query_d = self.q_depth
         
         # 计算顶点
         n_vertices, vert_indexes = octree.compute_vertices(query_d)
@@ -675,7 +753,6 @@ class PNCHLoss(nn.Module):
         relative_col_loss = F.mse_loss(pred_col * mask_unsqueezed, tgt_col * mask_unsqueezed) / (F.mse_loss(tgt_col * mask_unsqueezed, torch.zeros_like(tgt_col)) + 1e-8)        
         # col_loss = F.l1_loss(pred_col * mask_unsqueezed, tgt_col * mask_unsqueezed)
 
-        # print(pred_col.shape, tgt_col.shape, mask_unsqueezed.shape)
         hit_loss = F.binary_cross_entropy(pred_hit, mask)
         
         # return pos_loss + norm_loss + 2*col_loss + hit_loss
@@ -700,3 +777,252 @@ class PNHLoss(nn.Module):
         return 2*pos_loss + norm_loss + 2*hit_loss
 
 
+
+class VAEEncoder(torch.nn.Module):
+    def __init__(self, in_channels: int, latent_dim: int = 32, interp: str = 'linear', nempty: bool = False):
+        super(VAEEncoder, self).__init__()
+        self.in_channels = in_channels
+        self.latent_dim = latent_dim
+        self.nempty = nempty
+        self.config_network()
+        self.encoder_stages = len(self.encoder_blocks)
+    # encoder
+        self.conv1 = OctreeConvBnRelu(in_channels, self.encoder_channel[0], nempty=nempty)
+        self.downsample = torch.nn.ModuleList([OctreeConvBnRelu(
+            self.encoder_channel[i], self.encoder_channel[i+1], kernel_size=[2],
+            stride=2, nempty=nempty) for i in range(self.encoder_stages - 1)])
+        self.encoder = torch.nn.ModuleList([ocnn.modules.OctreeResBlocks(
+            self.encoder_channel[i], self.encoder_channel[i],
+            self.encoder_blocks[i], self.bottleneck, nempty, self.resblk)
+            for i in range(self.encoder_stages)])
+        self.encoder_final_ln = torch.nn.LayerNorm(self.encoder_channel[-1])
+        self.encoder_fc = nn.Linear(self.encoder_channel[-1], latent_dim * 2)  # 输出均值和对数方差
+
+    def config_network(self):
+        self.encoder_channel = [32, 64, 128, 128, 256, 256]
+        self.encoder_blocks = [2, 2, 2, 2, 2, 2]
+        self.bottleneck = 1
+        self.resblk = OctreeBnResBlock2
+
+    def sample_from_posterior(self, h: torch.Tensor, sample_posterior: bool = True) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """从后验分布采样"""
+        # h的形状: [N, latent_dim*2]
+        mean, logvar = h.chunk(2, dim=-1)  # 每个都是[N, latent_dim]
+        
+        if sample_posterior and self.training:
+            std = torch.exp(0.5 * logvar)
+            z = mean + std * torch.randn_like(std)
+        else:
+            z = mean
+            
+        return z, mean, logvar
+
+    def forward(self, data: torch.Tensor, octree: Octree, depth: int, sample_posterior: bool = True):
+        convd = dict()
+        data = ocnn.nn.octree_pad(data, octree, depth)
+        conv = self.conv1(data, octree, depth)
+        for i in range(self.encoder_stages):
+            d = depth - i
+            convd[d] = self.encoder[i](conv, octree, d)
+            if i < self.encoder_stages - 1:
+                conv = self.downsample[i](convd[d], octree, d)
+            # conv = self.downsample[i](convd[d], octree, d)
+            # convd[d-1] = self.encoder[i](conv, octree, d-1)
+        encoded_feature = convd[depth - self.encoder_stages + 1]
+        encoded_feature = self.encoder_final_ln(encoded_feature)
+        h = self.encoder_fc(encoded_feature)
+
+        z, mean, logvar = self.sample_from_posterior(h, sample_posterior)
+        return z, mean, logvar
+
+
+class VAEDecoder(torch.nn.Module):
+    def __init__(self, out_channels: int, latent_dim: int = 32, interp: str = 'linear', nempty: bool = True):
+        super(VAEDecoder, self).__init__()
+        self.out_channels = out_channels
+        self.latent_dim = latent_dim
+        self.nempty = nempty
+        self.config_network()
+        self.decoder_stages = len(self.decoder_blocks)
+
+    # # decoder
+        self.upsample = torch.nn.ModuleList([OctreeDeconvBnRelu(
+            self.decoder_channel[i], self.decoder_channel[i+1], kernel_size=[2],
+            stride=2, nempty=False) for i in range(self.decoder_stages - 1)])
+        self.decoder = torch.nn.ModuleList([ocnn.modules.OctreeResBlocks(
+            self.decoder_channel[i], self.decoder_channel[i],
+            self.decoder_blocks[i], self.bottleneck, False, self.resblk)
+            for i in range(self.decoder_stages)])
+        self.decoder_input_fc = nn.Linear(latent_dim, self.decoder_channel[0])
+        self.decoder_final_ln = torch.nn.LayerNorm(self.decoder_channel[-1])
+        self.decoder_output_fc = nn.Linear(self.decoder_channel[-1], out_channels)
+        # self.split_heads = nn.ModuleList([ocnn.modules.Conv1x1(self.decoder_channel[i], 1, use_bias=True) for i in range(self.decoder_stages)])
+        self.split_heads = nn.ModuleList([self._make_predict_module(self.decoder_channel[i], 2) for i in range(self.decoder_stages)])
+    #     self.header = ocnn.modules.Conv1x1(self.decoder_channel[-1], 63, use_bias=True)
+    #     self.octree_interp = ocnn.nn.OctreeInterp(interp, nempty)
+
+    def _make_predict_module(self, channel_in, channel_out=2, num_hidden=64):
+        return torch.nn.Sequential(
+            ocnn.modules.Conv1x1BnRelu(channel_in, num_hidden),
+            ocnn.modules.Conv1x1(num_hidden, channel_out, use_bias=True))
+
+    def config_network(self):
+        # self.decoder_channel = [256, 256, 128, 96, 96]
+        # single decoder
+        self.decoder_channel = [256, 256, 128, 128]
+        self.decoder_blocks = [2, 2, 2, 2]
+        self.bottleneck = 1
+        self.resblk = OctreeBnResBlock2
+
+    def forward(self, z: torch.Tensor, octree: Octree, depth: int, update_octree: bool = False):
+        deconv = self.decoder_input_fc(z)
+        subs = []
+        subs_gt = []
+        # octree = copy.deepcopy(octree)
+        
+        for i in range(self.decoder_stages):
+            d = depth + i
+
+            deconv = self.decoder[i](deconv, octree, d)
+            sub_logit = self.split_heads[i](deconv)
+            subs.append(sub_logit)
+            if not update_octree:
+                subs_gt.append(octree.get_split(d))
+            else:
+                sub = sub_logit.argmax(dim=1).int()
+                # count sub.squeeze(1) > 0.5
+                print(f"Stage {i}, depth {d}, split ratio: {(sub > 0.5).float().mean().item():.4f}")
+                # octree.octree_split(sub.squeeze(1) > 0.5, d)
+                octree.octree_split(sub, d)
+            if i < self.decoder_stages - 1:
+                if update_octree:
+                    octree.octree_grow(d+1)
+                deconv = self.upsample[i](deconv, octree, d)
+        deconv = self.decoder_final_ln(deconv)
+        deconv = self.decoder_output_fc(deconv)
+        deconv = ocnn.nn.octree_depad(deconv, octree, depth + self.decoder_stages - 1)
+        if not update_octree:
+            return deconv, subs, subs_gt
+        else:
+            return deconv, octree
+
+
+class VAE(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, latent_dim: int = 32, interp: str = 'linear', nempty: bool = True):
+        super().__init__()
+        self.encoder = VAEEncoder(in_channels, latent_dim, interp, False)
+        self.decoder = VAEDecoder(out_channels, latent_dim, interp, nempty)
+
+    def forward(self, data: torch.Tensor, octree: Octree, depth: int, sample_posterior: bool = True, update_octree: bool = False):
+        z, mean, logvar = self.encoder(data, octree, depth, sample_posterior)
+        if not update_octree:
+            recon_data, subs, subs_gt = self.decoder(z, octree, depth - self.encoder.encoder_stages + 1, update_octree)
+            return recon_data, subs, subs_gt, mean, logvar
+        else:
+            recon_data, output_oct = self.decoder(z, octree, depth - self.encoder.encoder_stages + 1, update_octree)
+            return recon_data, output_oct
+
+
+
+class NeuralVAEModel(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, q_depth: int=7):
+        super().__init__()
+        self.in_channels = in_channels
+        self.feature_model = VAE(in_channels=self.in_channels, out_channels=out_channels)
+        # self.renderer_model = VoxelRendererModel(f_dim=16, n_iters=3)
+        self.renderer_model = SplitVoxelRendererModel(f_dim=16, n_iters=3)
+        self.q_depth = q_depth
+
+    def forward(self, data: torch.Tensor, octree: Octree, depth: int, pin: torch.Tensor, direction: torch.Tensor, voxel_indices: torch.Tensor, sample_posterior: bool = True, update_octree: bool = False) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]] | Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # 1. 特征提取
+        if not update_octree:
+            vert_feat, subs, subs_gt, mean, logvar = self.feature_model(data, octree, depth, sample_posterior, update_octree)
+        else:
+            vert_feat, octree = self.feature_model(data, octree, depth, sample_posterior, update_octree)
+        # vert_feat = self.feature_model(data, octree, depth)
+        
+        # 2. 构建顶点特征图
+        average_feat, vert_indexes = self._build_vertex_feature_map(vert_feat, octree)
+        
+        # 3. 查询目标体素顶点特征
+        vert_feat = self._query_voxel_vertices(
+            average_feat, vert_indexes, octree, voxel_indices
+        )
+        
+        # 4. 渲染交点
+        intersection = self.renderer_model(pin, direction, vert_feat)
+        if not update_octree:
+            return intersection, subs, subs_gt, mean, logvar
+        else:
+            return intersection, octree
+        # return intersection
+    
+    def _build_vertex_feature_map(
+        self,
+        vert_feat: torch.Tensor,
+        octree: Octree
+    ) -> torch.Tensor:
+        """
+        构建顶点特征图
+        1. 计算顶点索引
+        2. 扩展特征维度
+        3. 计算平均特征
+        """
+        query_d = self.q_depth
+        
+        # 计算顶点
+        n_vertices, vert_indexes = octree.compute_vertices(query_d)
+
+        assert vert_feat.shape[0] == vert_indexes.shape[0]
+        
+        # 准备特征存储空间
+        feat_channels = vert_feat.shape[1] // 8
+        device = vert_feat.device
+        dtype = vert_feat.dtype
+        
+        all_vertices = torch.zeros(
+            (n_vertices * 8, feat_channels + 1),
+            dtype=dtype,
+            device=device
+        )
+        
+        # 扩展特征（添加权重通道）
+        vert_indexes_expanded = vert_indexes * 8 + torch.arange(
+            8, device=device
+        ).unsqueeze(0)
+        
+        vert_feat_reshaped = vert_feat.view(vert_indexes.shape[0] * 8, -1)
+        weights = torch.ones(
+            (vert_indexes.shape[0] * 8, 1), device=device
+        )
+        vert_feat_with_weight = torch.cat([vert_feat_reshaped, weights], dim=1)
+        
+        # 填充特征
+        all_vertices[vert_indexes_expanded.view(-1)] = vert_feat_with_weight
+        
+        # 计算加权平均特征
+        reshaped_features = all_vertices.view(-1, 8, feat_channels + 1)
+        feature_sum = reshaped_features[:, :, :-1].sum(dim=1)
+        weight_sum = reshaped_features[:, :, -1:].sum(dim=1)
+        average_feat = feature_sum / weight_sum
+        
+        assert average_feat.shape[0] == n_vertices
+        return average_feat, vert_indexes
+
+    def _query_voxel_vertices(
+        self,
+        average_feat: torch.Tensor,
+        vert_indexes: torch.Tensor,
+        octree: Octree,
+        voxel_indices: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        查询指定体素的顶点特征
+        """        
+        # 获取目标体素的顶点索引
+        query_vert_indexes = vert_indexes[voxel_indices].view(-1, 2, 2, 2)
+        
+        # 查询顶点特征
+        vert_feat = average_feat[query_vert_indexes]
+        return vert_feat
+        

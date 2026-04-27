@@ -2,25 +2,30 @@ SOLVER:
   # gpu: 1, 2, 7
   # gpu: 0, 3, 4, 5
   # gpu: 3, 
-  # gpu: 1, 
+  gpu: 2, 
   # gpu: 4, 5, 6, 7
-  gpu: 0, 1, 2, 3
+  # gpu: 0, 1, 2, 3
   # gpu: 4,
   # run: best_view
-  run: train
+  # run: train
   # run: test
   # run: render
+  run: gen_sp_compare_render
+  # run: gen_sp
   type: adamw
   # empty_cache: false
 
   # logdir: logs/d10-6_lr0005
   # logdir: logs/d6_lr0005_0118
-  # logdir: logs/d7_scloss_decouple_0307
-  logdir: logs/d7_10c_5k_0312
+  logdir: logs/d7_scloss_decouple_0307
+  # logdir: logs/d7_vae_0423
+  # ckpt: /mnt/sdc/wangjh/NeuOct/logs/d7_vae_0406/checkpoints/00050.solver.tar
+  # logdir: logs/d6_10c_5k_0312
+  # logdir: logs/d7_10c_5k_0312
   # logdir: logs/d7_2c_niter3
   # logdir: logs/d7_rl2c_n3_1ssim_gw1_0304
   # logdir: logs/d6_lr001
-  max_epoch: 60
+  max_epoch: 110
   test_every_epoch: 5
   clip_grad: 1.0
   lr_type: cos_warmup
@@ -28,12 +33,13 @@ SOLVER:
   warmup_init: 0.001
   # milestones: (30,60)
   ckpt_num: 20
-  port: 12355
-  lr: 0.01
+  port: 12356
+  lr: 0.001
   weight_decay: 0.00000
   save_pred: False
   pin_memory: false
-  save_video: False
+  # save_video: False
+  save_video: True
 
 DATA:
   train:
@@ -41,6 +47,8 @@ DATA:
 
     # octree building
     depth: 9
+    # q_depth: 6
+    q_depth: 7
     full_depth: 2
 
     # transformation
@@ -63,7 +71,8 @@ DATA:
     location: /mnt/sdc/wangjh/Rasterize-to-Pointcloud/data/ShapeNet/image_512
     # location: /mnt/sdc/wangjh/pytorch3d_render_colmap/render_shapenet_results/02958343/render_16views
     # filelist: /data/wangjh/NeuOctree_1208/cache/depth5/02958343_car/filelist/train.txt
-    filelist: train_10c_5k.txt
+    # filelist: train_
+    filelist: train_6k_car.txt
     batch_size: 1
     shuffle: True
     num_workers: 0
@@ -78,6 +87,8 @@ DATA:
 
     # octree building
     depth: 9
+    # q_depth: 6
+    q_depth: 7
     full_depth: 2
 
     # transformation
@@ -103,8 +114,14 @@ DATA:
     # location: /home/wangjh/render_16views
     # filelist: /data/wangjh/NeuOctree_1208/cache/depth5/02958343_car/filelist/train.txt
     # filelist: test.txt
-    filelist: test_10c_5k.txt
-    # filelist: train1.txt
+    # filelist: test_10c_1.txt
+    # filelist: train_6k_car_deduplicated.txt
+    # filelist: train_6k_car_d10.txt
+    # filelist: test_10c_5k.txt
+    # filelist: test_6k_car.txt
+    # filelist: test_10c_5k.txt
+    filelist: train2.txt
+    # filelist: train_10c_small_deduplicated.txt
     # filelist: data/ShapeNet/ShapeNet_NV_simplified_with_normal/filelist/best_view.txt
     batch_size: 1
     shuffle: False
@@ -123,11 +140,16 @@ MODEL:
   # interp:   'linear'    # The interplation method: linear or nearest
   # stages: 7
   channel: 9
+  out_channel: 128
+  use_vae: False
+  # use_vae: True
   # channel: 6
   vp_ch: 63
   nout: 2
   multires: 10
   feature: LPF
+  # q_depth: 6
+  q_depth: 7
   # feature: LP
 
 

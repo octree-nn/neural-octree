@@ -32,17 +32,19 @@ class ShapeNetTransform:
 
 
 class ReadNpz:
-  def __init__(self, has_normal: bool = True, has_label: bool = False):
+  def __init__(self, has_normal: bool = True, has_label: bool = False, q_depth: int = 7):
     self.has_normal = has_normal
     self.has_label = has_label
+    self.q_depth = q_depth
 
-  def __call__(self, filename: str, q_depth=7):
+  def __call__(self, filename: str):
+    q_depth = self.q_depth
     data_path = filename.rsplit('/', 1)[0]
     i = filename.rsplit('/', 1)[1]
     # i = filename.rsplit('/', 1)[1].split('.')[0]
     sub_data_path = data_path.rsplit('/', 2)[1] + '/' + data_path.rsplit('/', 1)[1]
-    pcd_path = "/mnt/sdb/wangjh/data_neuoct/ShapeNet/pcd_50w/" + sub_data_path + '/pointcloud.pth'
-    # pcd_path = "/mnt/sdb/wangjh/data_neuoct/ShapeNet/pcdfromrgb/" + sub_data_path + '/pointcloud.pth'
+    # pcd_path = "/mnt/sdb/wangjh/data_neuoct/ShapeNet/pcd_50w/" + sub_data_path + '/pointcloud.pth'
+    pcd_path = "/mnt/sdb/wangjh/data_neuoct/ShapeNet/pcdfromrgb/" + sub_data_path + '/pointcloud.pth'
     # pcd_path = "/mnt/sdc/wangjh/pytorch3d_render_colmap/render_shapenet_results_pcd2pth/02958343/pcd/" + sub_data_path + '/pcd.pth'
     # npz_path = "/mnt/sdc/wangjh/Rasterize-to-Pointcloud/data/ShapeNet/pcdfromrgb/" + sub_data_path + '/pointcloud.npz'
     # npz_path = data_path + '/pointcloud.npz'
@@ -70,7 +72,7 @@ class ReadNpz:
     # points.points = points.points * 1.98
     points.points = points.points * 0.99
 
-    octree = Octree(depth=9, device='cuda')
+    octree = Octree(depth=9, full_depth=4, device='cuda')
     octree.build_octree(points)
 
     file_path = frame['file_path'].split('.')[0]
@@ -109,7 +111,7 @@ class ReadNpz:
 
 def get_shapenet_dataset(flags):
     transform = ShapeNetTransform()
-    read_ply = ReadNpz(has_normal=True, has_label=True)
+    read_ply = ReadNpz(has_normal=True, has_label=True, q_depth=flags.q_depth)
     dataset = Dataset(flags.location, flags.filelist, transform,
                       read_file=read_ply, take=flags.take)
     return dataset, collate_batch
