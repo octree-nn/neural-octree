@@ -1,39 +1,81 @@
-1. Installation
+## NeuOctree
 
-1.1 Install Conda and create a Conda environment
+Neural surface representation for ray tracing and feedforward construction.
 
-   ```bash
-   conda create --name neuoct python=3.13
-   conda activate neuoct
-   ```
+**Paper:** TODO | **Pretrained models:** TODO | **Data:** TODO
 
-1.2 Clone this repository and Install the required packages.
+### 1. Installation
 
-   ```bash
-   git clone https://github.com/Timekisser/NeuOct
-   conda install ocnn thsolver tqdm tensorboard opencv-python torchmetrics
-   ```
+Linux, an NVIDIA GPU, and Blender 3.x (for mesh preprocessing) are required.
 
-1.3 Install PyTorch=2.6.0 with conda according to the official documentation.
+```bash
+conda create -n neuoct python=3.13 -y
+conda activate neuoct
+pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
+pip install -e '.[dev,preprocess,raytracing]'
+```
 
-   ```
-   pip3 install torch torchvision torchaudio
-   ```
+Run the following commands from the repository root.
 
+### 2. Optimize your own object
 
-2. Training
+Prepare any GLB/glTF, OBJ, PLY, or STL mesh. Keep associated textures and material files alongside the mesh. The script renders supervision, holds out test views, and generates the point cloud and configuration:
 
-2.1 Dataset (To be released soon)
+```bash
+python scripts/prepare_object.py --input /path/to/model.glb \
+  --output data/my_object --object custom/my_object --blender /path/to/blender
+```
 
-2.2 Run the training script
+Optimize **geometry and color**:
 
-   ```
-   python train.py --config vis_shapenet.yaml
-   ```
+```bash
+python scripts/train_object.py --config data/my_object/config.yaml \
+  --object custom/my_object --output outputs/my_object --epochs 300
+```
 
-2.3 Render the results
+Add `--geometry-only` for geometry without color. Use `--feature-dim 16 --hidden-dim 128` to set capacity, or `--gpus 2` for two visible GPUs. Existing prepared datasets can be used directly through `--config` and any `--object category/object_id`.
 
-   ```
-   python train.py --config vis_shapenet.yaml SOLVER.gpu 0,  \
-          SOLVER.run render
-   ```
+Pack the model and evaluate on held-out views:
+
+```bash
+neuoct-pack-local-checkpoint --config data/my_object/config.yaml \
+  --checkpoint outputs/my_object/custom-my_object.pt --object custom/my_object \
+  --output outputs/my_object/inference_fp16.pt --storage-dtype fp16
+
+neuoct-evaluate-object --config data/my_object/config.yaml \
+  --checkpoint outputs/my_object/inference_fp16.pt --object custom/my_object \
+  --output outputs/my_object/evaluation --data-split test --hit-threshold 0.4 --orient-normals
+```
+
+The paper's seven-object geometry presets remain available through `scripts/train_geometry.py --model Armadillo --tier 823`. They are optional presets; custom objects use `train_object.py`.
+
+### 3. Feedforward training and inference
+
+Download the processed data and weights (links pending), then set the data paths in `configs/feedforward.yaml`.
+
+```bash
+neuoct-train --config configs/feedforward.yaml SOLVER.gpu 0,1,2,3
+
+neuoct-evaluate-feedforward --config configs/feedforward.yaml \
+  --checkpoint checkpoints/feedforward.pth --output outputs/feedforward \
+  --hit-threshold 0.4 --orient-normals
+```
+
+### 4. Ray tracing
+
+Set the mesh, HDRI, and packed checkpoint paths in a scene YAML, then run:
+
+```bash
+python tools/neuoct_rt/render_scene.py --config configs/raytracing/chess_neuoct.yaml
+```
+
+For a quick check without external data or weights:
+
+```bash
+python scripts/smoke_pipeline.py --output outputs/smoke
+python tools/neuoct_rt/smoke_render.py --output outputs/smoke.png --device cpu
+```
+
+### Citation
+
+TODO

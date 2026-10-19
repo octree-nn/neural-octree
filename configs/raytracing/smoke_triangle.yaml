@@ -1,0 +1,40 @@
+version: 1
+render:
+  width: 128
+  height: 128
+  samples: 4
+  mode: one_bounce
+  max_depth: 2
+  seed: 0
+  tonemap: aces
+  exposure: 1.0
+  background: [0.05, 0.05, 0.08]
+camera:
+  type: perspective
+  layout: look_at
+  position: [0.0, 0.0, 3.0]
+  target: [0.0, 0.0, 0.0]
+  up: [0.0, 1.0, 0.0]
+  camera_angle_x: 0.7
+  convention: neuoct
+environment:
+  type: constant
+  color: [1.0, 1.0, 1.0]
+  intensity: 0.8
+primitives:
+  - type: mesh
+    name: smoke_triangle
+    vertices:
+      - [-1.0, -1.0, 0.0]
+      - [1.0, -1.0, 0.0]
+      - [0.0, 1.0, 0.0]
+    faces:
+      - [0, 1, 2]
+    material:
+      base_color: [0.85, 0.25, 0.20]
+      roughness: 0.35
+      metallic: 0.0
+output:
+  path: outputs/raytracing/smoke_triangle.png
+  metadata: outputs/raytracing/smoke_triangle.json
+  format: png

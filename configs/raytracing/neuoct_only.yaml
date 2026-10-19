@@ -1,0 +1,29 @@
+placement: placements/orbit10_01_5f9711.yaml
+render:
+  width: 256
+  height: 256
+  samples: 4
+  mode: one_bounce
+  max_depth: 2
+  seed: 0
+  tonemap: aces
+  exposure: 1.0
+  background: [0.05, 0.05, 0.08]
+scene:
+  checkpoint: checkpoints/example_object.pt
+  object: objaverse/01_5f9711ec59f5411fafaa8515289a6643
+  point_scale: 0.99
+  ray_scale: 0.5
+  hit_threshold: 0.5
+  ray_chunk_size: 16384
+  candidate_chunk_size: 65536
+  self_hit_eps: 0.0001
+  name: orbit10_01_5f9711
+environment:
+  type: constant
+  color: [1.0, 1.0, 1.0]
+  intensity: 0.8
+output:
+  path: outputs/raytracing/neuoct_only.png
+  metadata: outputs/raytracing/neuoct_only.json
+  format: png

@@ -1,0 +1,145 @@
+# Measured capacities used for the 28 geometry-compression cells.
+'122':
+  Armadillo:
+    octree_depth: 6
+    feature_dim: 9
+    hidden_dim: 72
+    payload_bytes: 124822
+  Buddha:
+    octree_depth: 6
+    feature_dim: 13
+    hidden_dim: 71
+    payload_bytes: 124398
+  Dragon:
+    octree_depth: 6
+    feature_dim: 8
+    hidden_dim: 67
+    payload_bytes: 124699
+  Einstein:
+    octree_depth: 6
+    feature_dim: 8
+    hidden_dim: 68
+    payload_bytes: 124517
+  Lucy:
+    octree_depth: 6
+    feature_dim: 19
+    hidden_dim: 72
+    payload_bytes: 124357
+  Metatron:
+    octree_depth: 5
+    feature_dim: 17
+    hidden_dim: 71
+    payload_bytes: 124101
+  XYZ_dragon:
+    octree_depth: 6
+    feature_dim: 17
+    hidden_dim: 69
+    payload_bytes: 124915
+'244':
+  Armadillo:
+    octree_depth: 7
+    feature_dim: 5
+    hidden_dim: 81
+    payload_bytes: 249011
+  Buddha:
+    octree_depth: 7
+    feature_dim: 6
+    hidden_dim: 98
+    payload_bytes: 249359
+  Dragon:
+    octree_depth: 6
+    feature_dim: 16
+    hidden_dim: 102
+    payload_bytes: 249091
+  Einstein:
+    octree_depth: 6
+    feature_dim: 16
+    hidden_dim: 104
+    payload_bytes: 248765
+  Lucy:
+    octree_depth: 7
+    feature_dim: 9
+    hidden_dim: 101
+    payload_bytes: 249779
+  Metatron:
+    octree_depth: 6
+    feature_dim: 8
+    hidden_dim: 99
+    payload_bytes: 249026
+  XYZ_dragon:
+    octree_depth: 7
+    feature_dim: 9
+    hidden_dim: 90
+    payload_bytes: 249004
+'81':
+  Armadillo:
+    octree_depth: 6
+    feature_dim: 6
+    hidden_dim: 54
+    payload_bytes: 82330
+  Buddha:
+    octree_depth: 6
+    feature_dim: 9
+    hidden_dim: 52
+    payload_bytes: 82812
+  Dragon:
+    octree_depth: 6
+    feature_dim: 5
+    hidden_dim: 55
+    payload_bytes: 82933
+  Einstein:
+    octree_depth: 6
+    feature_dim: 5
+    hidden_dim: 55
+    payload_bytes: 82589
+  Lucy:
+    octree_depth: 6
+    feature_dim: 13
+    hidden_dim: 55
+    payload_bytes: 82895
+  Metatron:
+    octree_depth: 5
+    feature_dim: 11
+    hidden_dim: 58
+    payload_bytes: 82599
+  XYZ_dragon:
+    octree_depth: 6
+    feature_dim: 11
+    hidden_dim: 56
+    payload_bytes: 82801
+'823':
+  Armadillo:
+    octree_depth: 7
+    feature_dim: 16
+    hidden_dim: 194
+    payload_bytes: 840881
+  Buddha:
+    octree_depth: 7
+    feature_dim: 21
+    hidden_dim: 194
+    payload_bytes: 841493
+  Dragon:
+    octree_depth: 7
+    feature_dim: 13
+    hidden_dim: 190
+    payload_bytes: 841674
+  Einstein:
+    octree_depth: 7
+    feature_dim: 12
+    hidden_dim: 180
+    payload_bytes: 841204
+  Lucy:
+    octree_depth: 7
+    feature_dim: 31
+    hidden_dim: 196
+    payload_bytes: 842165
+  Metatron:
+    octree_depth: 7
+    feature_dim: 7
+    hidden_dim: 175
+    payload_bytes: 842349
+  XYZ_dragon:
+    octree_depth: 7
+    feature_dim: 29
+    hidden_dim: 195
+    payload_bytes: 842054

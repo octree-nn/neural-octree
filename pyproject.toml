@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neuoct"
+version = "0.1.0"
+description = "NeuOctree: structured neural surfaces for ray tracing and feedforward construction"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+  "torch==2.6.0",
+  "torchvision==0.21.0",
+  "ocnn==2.3.2",
+  "thsolver==1.2.1",
+  "numpy>=2.0",
+  "Pillow>=11",
+  "PyYAML>=6",
+  "yacs>=0.1.8",
+  "torchmetrics>=1.8",
+  "tqdm>=4.66",
+  "opencv-python>=4.10",
+  "tensorboard>=2.18",
+]
+
+[project.optional-dependencies]
+render = ["opencv-python>=4.10"]
+preprocess = ["open3d>=0.19", "trimesh>=4", "scipy>=1.14", "OpenEXR>=3.4"]
+raytracing = ["trimesh>=4", "embreex>=2.17", "OpenEXR>=3.4"]
+exr = ["OpenEXR>=3.4"]
+dev = ["pytest>=8", "ruff>=0.12"]
+
+[project.scripts]
+neuoct-train = "neuoct.cli.train:main"
+neuoct-evaluate = "neuoct.cli.evaluate:main"
+neuoct-render = "neuoct.cli.render:main"
+neuoct-export-features = "neuoct.cli.export_features:main"
+neuoct-build-manifest = "neuoct.cli.build_manifest:main"
+neuoct-convert-pointcloud = "neuoct.cli.convert_pointcloud:main"
+neuoct-compare-reconstruction = "neuoct.cli.compare_reconstruction:main"
+neuoct-chamfer = "neuoct.cli.chamfer:main"
+neuoct-optimize-object = "neuoct.cli.optimize_object:main"
+neuoct-evaluate-object = "neuoct.cli.evaluate_object:main"
+neuoct-render-object-orbit = "neuoct.cli.render_object_orbit:main"
+neuoct-pack-local-checkpoint = "neuoct.cli.pack_local_checkpoint:main"
+neuoct-evaluate-feedforward = "neuoct.cli.evaluate_feedforward:main"
+neuoct-render-feedforward-orbit = "neuoct.cli.render_feedforward_orbit:main"
+neuoct-calibrate-bn = "neuoct.cli.calibrate_bn:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+  "gpu: requires a CUDA-capable GPU",
+  "regression: compares the refactor against the legacy implementation",
+  "real_data: reads the local ShapeNet sample data",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+exclude = ["experiments"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]

@@ -1,0 +1,9 @@
+placement: placements/chess_neuoct_base.yaml
+scene:
+  name: chess_neuoct_env_alt
+environment:
+  rotation_deg: 105.0
+  strength: 3.0
+output:
+  path: outputs/raytracing/chess_neuoct_env_alt.png
+  metadata: outputs/raytracing/chess_neuoct_env_alt.json

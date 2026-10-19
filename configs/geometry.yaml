@@ -1,0 +1,34 @@
+# Geometry compression data; capacity and optimizer options are CLI arguments.
+DATA:
+  train:
+    location: data/geometry/train
+    pointcloud_root: data/geometry/pointclouds
+    filelist: data/geometry/train.txt
+    depth: 7
+    q_depth: 7
+    full_depth: 4
+    image_width: 512
+    image_height: 512
+    point_scale: 0.99
+    ray_scale: 0.5
+    camera_convention: legacy_blender
+    orbit_up_axis: z
+    object_cache_size: 2
+    octree_cache_size: 1
+    take: -1
+  test:
+    location: data/geometry/eval
+    pointcloud_root: data/geometry/pointclouds
+    filelist: data/geometry/eval.txt
+    depth: 7
+    q_depth: 7
+    full_depth: 4
+    image_width: 512
+    image_height: 512
+    point_scale: 0.99
+    ray_scale: 0.5
+    camera_convention: legacy_blender
+    orbit_up_axis: z
+    object_cache_size: 2
+    octree_cache_size: 1
+    take: -1

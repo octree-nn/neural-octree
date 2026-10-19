@@ -1,0 +1,14 @@
+placement: placements/chess_neuoct_base.yaml
+scene:
+  name: chess_neuoct_fisheye
+camera:
+  type: equidistant
+  layout: matrix
+  convention: legacy_blender
+  fisheye_fov_deg: 180.0
+environment:
+  rotation_deg: 285.0
+  strength: 1.0
+output:
+  path: outputs/raytracing/chess_neuoct_fisheye.png
+  metadata: outputs/raytracing/chess_neuoct_fisheye.json

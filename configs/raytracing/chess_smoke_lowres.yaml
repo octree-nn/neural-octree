@@ -1,0 +1,17 @@
+placement: placements/chess_neuoct_base.yaml
+scene:
+  name: chess_smoke_lowres
+render:
+  width: 64
+  height: 64
+  samples: 1
+  mode: one_bounce
+  max_depth: 1
+  seed: 7
+  batch_samples: 1
+environment:
+  rotation_deg: 285.0
+  strength: 1.0
+output:
+  path: outputs/raytracing/chess_smoke_lowres.png
+  metadata: outputs/raytracing/chess_smoke_lowres.json

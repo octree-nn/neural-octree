@@ -1,0 +1,18 @@
+placement: placements/chess_neuoct_base.yaml
+scene:
+  name: chess_neuoct_reflection
+  neuoct_material:
+    base_color: [1.0, 1.0, 1.0]
+    metallic: 1.0
+    roughness: 0.04
+    specular: 0.04
+  material_overrides:
+    - match: Chessboard
+      by: node
+      material: {roughness: 0.08, metallic: 0.0}
+environment:
+  rotation_deg: 285.0
+  strength: 1.0
+output:
+  path: outputs/raytracing/chess_neuoct_reflection.png
+  metadata: outputs/raytracing/chess_neuoct_reflection.json
