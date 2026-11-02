@@ -2,7 +2,7 @@
 
 Neural surface representation for ray tracing and feedforward construction.
 
-**Paper:** TODO | **Pretrained models:** TODO | **Data:** TODO
+[Paper](https://arxiv.org/abs/2610.38441) | [Weights](https://huggingface.co/JKAlice/neural-octree/tree/main/weights) | [Objaverse filelists](https://huggingface.co/JKAlice/neural-octree/tree/main/filelists/objaverse)
 
 ### 1. Installation
 
@@ -51,15 +51,31 @@ The paper's seven-object geometry presets remain available through `scripts/trai
 
 ### 3. Feedforward training and inference
 
-Download the processed data and weights (links pending), then set the data paths in `configs/feedforward.yaml`.
+Download the paper's feedforward checkpoint and Objaverse filelists:
 
 ```bash
-neuoct-train --config configs/feedforward.yaml SOLVER.gpu 0,1,2,3
+pip install -U huggingface_hub
+hf download JKAlice/neural-octree --include 'weights/feedforward.pth' 'filelists/*' --local-dir assets
+```
 
-neuoct-evaluate-feedforward --config configs/feedforward.yaml \
-  --checkpoint checkpoints/feedforward.pth --output outputs/feedforward \
+Prepare the 31,761 training and 1,000 validation objects (8 views each). This downloads the original GLBs and generates images, colored point clouds, depth-9 occupancy, and a training config; processed data is not hosted.
+
+```bash
+python scripts/prepare_objaverse.py --filelists assets/filelists/objaverse \
+  --output data/objaverse --blender /path/to/blender
+```
+
+Re-run the same command to resume. For a small check, add `--limit 1` and use a separate output directory. `--workers 2` processes two objects concurrently on the visible GPU.
+
+```bash
+neuoct-train --config data/objaverse/config.yaml SOLVER.gpu 0,1,2,3
+
+neuoct-evaluate-feedforward --config data/objaverse/config.yaml \
+  --checkpoint assets/weights/feedforward.pth --output outputs/feedforward \
   --hit-threshold 0.4 --orient-normals
 ```
+
+The same HF repository includes the paper's 28 geometry checkpoints under `weights/geometry/<tier>KiB/<model>/inference_fp16.pt` and the 30 evaluated Objaverse IDs in `filelists/objaverse/eval30_uids.txt`.
 
 ### 4. Ray tracing
 
@@ -78,4 +94,12 @@ python tools/neuoct_rt/smoke_render.py --output outputs/smoke.png --device cpu
 
 ### Citation
 
-TODO
+```bibtex
+@article{wang2026neural,
+  title={Neural Explicit Shape Representation},
+  author={Wang, Jun-Hao and Lu, Changan and Chen, Baoquan and Wang, Peng-Shuai},
+  journal={arXiv preprint arXiv:2610.38441},
+  year={2026},
+  url={https://arxiv.org/abs/2610.38441}
+}
+```
